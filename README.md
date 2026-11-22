@@ -171,6 +171,9 @@ target_link_libraries(app PRIVATE cboot::cboot_app)
 `CMAKE_CXX_SCAN_FOR_MODULES ON`、`CMAKE_EXPERIMENTAL_CXX_IMPORT_STD=<uuid>`；
 `cbootConfig.cmake` 会注入 `-freflection` 与运行时链接项。
 
+独立应用示例（Release 安装 + `find_package` + class 风格）见
+[examples/standalone/README.md](examples/standalone/README.md)。
+
 ## 4.4 性能
 
 Release 构建、8 连接、16 万请求、0 失败：
@@ -190,9 +193,10 @@ Release 构建、8 连接、16 万请求、0 失败：
 # 5. 文档
 
 - [使用手册](docs/使用手册.md)
+- [AOP 切面](docs/AOP.md)
 - [更新日志](docs/CHANGELOG.md)
 - [性能测试与 Java 对拍](docs/性能测试.md)
-- [完整示例（DI + 配置 + AOP + REST）](examples/users_api.cpp)
+- [完整示例（独立应用：安装 SDK + find_package + class）](examples/standalone/README.md)
 
 # 6. 目录
 

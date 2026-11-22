@@ -1,5 +1,6 @@
 {
-  "server": { "port": 8080 },
+  "server": { "port": 8080, "workers": 4 },
+  "app": { "page_size": 20 },
   "db": {
     "host": "${CB_DB_HOST:localhost}",
     "port": 5432,

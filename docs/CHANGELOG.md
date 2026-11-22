@@ -17,8 +17,5 @@
 - IOCP 失败完成包状态校验与 accept 链自愈。
 - 压测客户端 RST 关闭，避免 TIME_WAIT 耗尽临时端口。
 
-### 文档
-- 新增使用手册、性能测试、MIT LICENSE、项目 skill；README 重写为主页。
-
 ### 测试
 - 18 项 ctest，Debug/Release 全绿；7 个负面用例锁定诊断。
