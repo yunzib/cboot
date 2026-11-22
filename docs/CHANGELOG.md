@@ -10,6 +10,7 @@
 - `[[=EventListener{}]]` + `ctx.publish` / 注入 `event_publisher`：同步事件派发、
   顺序稳定、异常隔离、可接切面。
 - `[[=Scheduled{ms}]]` 固定延迟定时任务：单调度线程、异常隔离、停机取消。
+- 内建 `/health`（200/503 + JSON）与 `/beans`（仅 dev）；`health_registry` 可标记 DOWN。
 - threads / IOCP / epoll 三后端：keep-alive、pipelining、背压、超时、优雅停机。
 - `application<App>` 自动发现、`find_package(cboot)`。
 
@@ -22,4 +23,4 @@
 - 压测客户端 RST 关闭，避免 TIME_WAIT 耗尽临时端口。
 
 ### 测试
-- 21 项 ctest，Debug/Release 全绿；9 个负面用例锁定诊断。
+- 22 项 ctest，Debug/Release 全绿；9 个负面用例锁定诊断。

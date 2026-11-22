@@ -98,6 +98,56 @@ private:
     event_error_handler error_;
 };
 
+/** @brief 健康状态快照 */
+export struct health_snapshot {
+    bool healthy = true;
+    std::string reason;
+};
+
+/**
+ * @brief 健康状态登记器（容器提供，本身不是 bean）
+ *
+ * 业务 bean 可注入 `health_registry&`，在依赖不可用时标记 DOWN；
+ * `/health` 读取该状态返回 200/503。
+ */
+export class health_registry {
+public:
+    health_registry() = default;
+    health_registry(const health_registry&) = delete;
+    health_registry& operator=(const health_registry&) = delete;
+
+    void set_healthy() {
+        std::lock_guard lock(mu_);
+        healthy_ = true;
+        reason_.clear();
+    }
+
+    void set_unhealthy(std::string reason) {
+        std::lock_guard lock(mu_);
+        healthy_ = false;
+        reason_ = std::move(reason);
+    }
+
+    health_snapshot snapshot() const {
+        std::lock_guard lock(mu_);
+        return {healthy_, reason_};
+    }
+
+private:
+    mutable std::mutex mu_;
+    bool healthy_ = true;
+    std::string reason_;
+};
+
+/** @brief bean 元数据（/beans 用；字符串均为静态存储） */
+export struct bean_info {
+    std::string_view type;
+    std::string_view name;
+    std::string_view profile;
+    bool active = false;
+    std::vector<std::string_view> deps;
+};
+
 namespace detail {
 
 /** @brief 内建依赖：config::properties（由 app 加载后注入，不算 bean） */
@@ -108,8 +158,14 @@ consteval bool is_event_publisher_dep(std::meta::info t) {
     return t == ^^event_publisher;
 }
 
+/** @brief 内建依赖：health_registry（由容器提供，不算 bean） */
+consteval bool is_health_registry_dep(std::meta::info t) {
+    return t == ^^health_registry;
+}
+
 consteval bool is_builtin_dep(std::meta::info t) {
-    return is_config_dep(t) || is_event_publisher_dep(t);
+    return is_config_dep(t) || is_event_publisher_dep(t)
+        || is_health_registry_dep(t);
 }
 
 /** @brief consteval 十进制转换（std::to_string 在 libstdc++ 非 constexpr） */
@@ -829,6 +885,7 @@ class context {
 public:
     /** @brief cfg：应用配置（nullptr = 无；bean 构造器注入 const config::properties&） */
     explicit context(const config::properties* cfg = nullptr) : cfg_(cfg) {
+        const auto t0 = std::chrono::steady_clock::now();
         constexpr bool listeners_ok =
             (detail::validate_listeners<Beans...>(), true);
         constexpr bool scheduled_ok =
@@ -841,6 +898,9 @@ public:
         build_all();
         register_scheduled_tasks();
         start_scheduler();
+        startup_ms_ = static_cast<std::size_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count());
     }
     ~context() {
         stop_scheduler();
@@ -852,6 +912,40 @@ public:
     /** @brief 清单下标 I 的 bean 在当前 profile 下是否激活 */
     template <std::size_t I>
     bool is_active() const { return active_[I]; }
+
+    /** @brief 当前健康状态快照（/health 用） */
+    health_snapshot health() const { return health_.snapshot(); }
+
+    /** @brief 健康登记器（业务 bean 注入 health_registry& 同款；测试可直接取） */
+    health_registry& health_check() { return health_; }
+
+    /** @brief 激活 bean 数量 */
+    std::size_t active_bean_count() const {
+        std::size_t n = 0;
+        for (bool a : active_)
+            if (a) ++n;
+        return n;
+    }
+
+    /** @brief 容器构造耗时（毫秒，含 bean 构造与 PostConstruct） */
+    std::size_t startup_ms() const { return startup_ms_; }
+
+    /** @brief 当前激活的 profile 中是否包含 name */
+    bool has_profile(std::string_view name) const {
+        for (const auto& p : active_profiles_)
+            if (std::string_view(p) == name) return true;
+        return false;
+    }
+
+    /** @brief bean 清单与依赖（/beans 用；字符串指向静态存储） */
+    std::vector<bean_info> beans_info() const {
+        std::vector<bean_info> out;
+        out.reserve(sizeof...(Beans));
+        [&]<std::size_t... I>(std::index_sequence<I...>) {
+            (out.push_back(make_bean_info<I>()), ...);
+        }(std::make_index_sequence<sizeof...(Beans)>{});
+        return out;
+    }
 
     /** @brief 按类型取 bean（唯一候选，或候选中的唯一默认实例） */
     template <class T>
@@ -1112,12 +1206,38 @@ private:
         if (scheduler_.joinable()) scheduler_.join();
     }
 
+    template <std::size_t I>
+    bean_info make_bean_info() const {
+        bean_info info;
+        info.type = detail::type_name_of<bean_t<I>>();
+        info.name = detail::bean_name_of<bean_t<I>>.view();
+        info.profile = detail::profile_of<bean_t<I>>.view();
+        info.active = active_[I];
+        constexpr std::size_t D = detail::dep_count<bean_t<I>>();
+        [&]<std::size_t... J>(std::index_sequence<J...>) {
+            (append_bean_dep<I, J>(info), ...);
+        }(std::make_index_sequence<D>{});
+        return info;
+    }
+
+    template <std::size_t I, std::size_t J>
+    void append_bean_dep(bean_info& info) const {
+        constexpr std::meta::info dep = detail::nth_dep<bean_t<I>, J>();
+        if constexpr (!detail::is_builtin_dep(dep)
+                      && !detail::dep_has_value<bean_t<I>, J>) {
+            info.deps.push_back(std::meta::has_identifier(dep)
+                ? std::meta::identifier_of(dep) : std::string_view{"?"});
+        }
+    }
+
     std::tuple<std::unique_ptr<Beans>...> beans_{};
     const config::properties* cfg_ = nullptr;
     std::array<bool, sizeof...(Beans)> active_{};
     std::vector<std::string> active_profiles_;
     event_publisher::dispatch_map event_map_;
     event_publisher publisher_;
+    health_registry health_;
+    std::size_t startup_ms_ = 0;
     std::vector<scheduled_task> scheduled_tasks_;
     std::mutex sched_mu_;
     std::condition_variable_any sched_cv_;
@@ -1272,6 +1392,8 @@ private:
                 return *cfg_;                       // const config::properties&
             } else if constexpr (detail::is_event_publisher_dep(dep)) {
                 return (publisher_);                // event_publisher&
+            } else if constexpr (detail::is_health_registry_dep(dep)) {
+                return (health_);                   // health_registry&
             } else {
                 constexpr std::size_t I =
                     detail::resolve_dep_index<T, J, Beans...>();

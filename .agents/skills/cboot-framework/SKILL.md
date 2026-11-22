@@ -28,7 +28,7 @@ cmake --preset gcc-release && cmake --build --preset gcc-release
 ctest --test-dir build-release --output-on-failure
 ```
 
-改动框架后 Debug/Release 都要过 21 项 ctest；负面用例（`negative_*.cpp`）是
+改动框架后 Debug/Release 都要过 22 项 ctest；负面用例（`negative_*.cpp`）是
 预期编译失败，不能“修好”。
 
 ## 最小应用
@@ -241,6 +241,13 @@ struct App : application<App> {
 - 单调度线程，固定延迟（执行完成后等待 delay）；首次在 delay 之后。
 - 任务异常写 stderr 后继续；容器析构 `request_stop` + `join`；Profile 未激活不注册。
 - 任务应短小；当前无 cron / 线程池。
+
+## 健康检查
+
+- 应用自动挂载 `GET /health`：JSON `status/beans/startup_ms`，DOWN 时 503 + reason。
+- 业务 bean 注入内建 `health_registry&`，用 `set_unhealthy("...")` /
+  `set_healthy()` 标记；它不在 bean 清单里。
+- `GET /beans` 仅 `dev` profile 暴露，返回 type/name/profile/active/deps。
 
 ## 协程
 

@@ -39,6 +39,79 @@ export import cboot.web.server;         // server
 // 放进 namespace detail 会让 parent_of 返回 detail 命名空间，扫描落空
 struct scan_anchor {};
 
+/**
+ * @brief 内建运维端点（应用启动时自动挂载）
+ *
+ *   GET /health → 200 UP / 503 DOWN，JSON：status/beans/startup_ms/reason
+ *   GET /beans  → 仅 dev profile：bean 清单、激活状态、依赖
+ *
+ * 用户不需要实例化；`boot_runner` 会挂到 router 上。
+ */
+export template <class Ctx>
+class health_endpoint {
+public:
+    explicit health_endpoint(Ctx& ctx) : ctx_(ctx) {}
+
+    [[=Get{"/health"}]]
+    Response health() {
+        const health_snapshot h = ctx_.health();
+        std::string body;
+        body += "{\"status\":\"";
+        body += h.healthy ? "UP" : "DOWN";
+        body += "\",\"beans\":";
+        body += std::to_string(ctx_.active_bean_count());
+        body += ",\"startup_ms\":";
+        body += std::to_string(ctx_.startup_ms());
+        if (!h.healthy) {
+            body += ",\"reason\":";
+            json::write_escaped(body, h.reason);
+        }
+        body += "}";
+        Response r;
+        r.status = h.healthy ? 200 : 503;
+        r.body = std::move(body);
+        return r;
+    }
+
+    [[=Get{"/beans"}]]
+    Response beans() {
+        if (!ctx_.has_profile("dev")) {
+            Response r = Response::text("not found");
+            r.status = 404;
+            return r;
+        }
+        std::string body = "[";
+        bool first = true;
+        for (const auto& b : ctx_.beans_info()) {
+            if (!first) body += ',';
+            first = false;
+            body += "{\"type\":";
+            json::write_escaped(body, b.type);
+            body += ",\"name\":";
+            json::write_escaped(body, b.name);
+            body += ",\"profile\":";
+            json::write_escaped(body, b.profile);
+            body += ",\"active\":";
+            body += b.active ? "true" : "false";
+            body += ",\"deps\":[";
+            bool dep_first = true;
+            for (auto d : b.deps) {
+                if (!dep_first) body += ',';
+                dep_first = false;
+                json::write_escaped(body, d);
+            }
+            body += "]}";
+        }
+        body += "]";
+        Response r;
+        r.body = std::move(body);
+        return r;
+    }
+
+private:
+    Ctx& ctx_;
+};
+
 namespace detail {
 
 // 优雅停机：控制台中断/关闭事件 → server.stop()（实现于 src/app/app.cpp）
@@ -138,6 +211,8 @@ struct boot_runner<type_list<Ts...>> {
         }
         server s(sc);
         install_stop_handler(s);                  // Ctrl+C / 关闭 → 优雅停机
+        health_endpoint<context<Ts...>> ops(ctx); // 内建 /health /beans
+        s.mount(ops);
         // 按清单下标挂载：同基类的多个 bean 用类型 get 会歧义；
         // 未激活 profile 的 bean 不挂载。
         [&]<std::size_t... Is>(std::index_sequence<Is...>) {
