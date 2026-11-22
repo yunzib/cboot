@@ -8,6 +8,7 @@
 <img alt="" src="https://img.shields.io/badge/c++-26-brightgreen" style="display: inline-block;" />
 <img alt="" src="https://img.shields.io/badge/gcc-16.2-brightgreen" style="display: inline-block;" />
 <img alt="" src="https://img.shields.io/badge/cmake-4.3-brightgreen" style="display: inline-block;" />
+<img alt="" src="https://img.shields.io/badge/license-MIT-blue" style="display: inline-block;" />
 </p>
 
 # 1. 项目描述
@@ -185,6 +186,7 @@ Release 构建、8 连接、16 万请求、0 失败：
 
 # 5. 文档
 
+- [使用手册](docs/使用手册.md)
 - [性能测试与 Java 对拍](docs/性能测试.md)
 - [完整示例（DI + 配置 + AOP + REST）](examples/users_api.cpp)
 
@@ -196,3 +198,7 @@ src/       实现单元
 test/      冒烟与负面编译用例
 examples/  使用示例
 ```
+
+# 7. 许可
+
+MIT License，见 [LICENSE](LICENSE)。
