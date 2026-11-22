@@ -13,6 +13,23 @@ struct Address {
 
 enum class Level { Debug, Info, Error };
 
+// 自定义类型 codec：Money ↔ JSON 整数
+struct Money {
+    std::int64_t cents{};
+    bool operator==(const Money&) const = default;
+};
+
+template <>
+struct json::codec<Money> {
+    static json::value to_value(const Money& m) {
+        return json::value(m.cents);
+    }
+    static Money from_value(const json::value& v) {
+        if (!v.is_int()) throw json::error("cboot.json: money expected integer");
+        return Money{v.as_int()};
+    }
+};
+
 struct User {
     std::string name;
     int age{};
@@ -98,6 +115,74 @@ int main() {
     json::write_to(dumped, u);
     if (dumped.view() != dumped_expected) return 17;
     if (dumped.size() <= 64) return 18;
+
+    // ── 6. map / unordered_map ↔ object ──
+    std::map<std::string, int> dict{{"a", 1}, {"b", 2}};
+    auto dict_v = json::from(dict);
+    if (json::dump(dict_v) != R"({"a":1,"b":2})") return 19;
+    if (!(json::get_as<std::map<std::string, int>>(dict_v) == dict)) return 20;
+
+    std::string dict_out;
+    json::write_to(dict_out, dict);
+    if (dict_out != R"({"a":1,"b":2})") return 21;
+
+    std::unordered_map<std::string, int> udict{{"x", 3}, {"y", 4}};
+    auto udict_v = json::from(udict);
+    if (!(json::get_as<std::unordered_map<std::string, int>>(udict_v) == udict))
+        return 22;
+
+    // ── 7. json::codec<T> ──
+    Money money{1234};
+    auto money_v = json::from(money);
+    if (!money_v.is_int() || money_v.as_int() != 1234) return 23;
+    if (!(json::get_as<Money>(money_v) == money)) return 24;
+
+    std::string money_out;
+    json::write_to(money_out, money);
+    if (money_out != "1234") return 25;
+
+    // ── 8. value 直接写出 / get_as<value> ──
+    std::string value_out;
+    json::write_to(value_out, dict_v);
+    if (value_out != R"({"a":1,"b":2})") return 26;
+    if (!(json::get_as<json::value>(dict_v) == dict_v)) return 27;
+
+    // ── 9. 错误行列 ──
+    try {
+        (void)json::parse("{\n  \"a\": }");
+        return 28;
+    } catch (const json::error& e) {
+        const std::string msg = e.what();
+        if (msg.find("line 2") == std::string::npos
+            || msg.find("column") == std::string::npos) return 29;
+    }
+
+    // ── 10. 嵌套深度 ──
+    std::string deep(129, '[');
+    deep.append(129, ']');
+    bool depth_threw = false;
+    try {
+        (void)json::parse(deep);
+    } catch (const json::error& e) {
+        depth_threw = std::string(e.what()).find("maximum nesting depth")
+            != std::string::npos;
+    }
+    if (!depth_threw) return 30;
+
+    std::string ok_depth(128, '[');
+    ok_depth.append(128, ']');
+    try {
+        (void)json::parse(ok_depth);
+    } catch (...) {
+        return 31;
+    }
+
+    try {
+        (void)json::parse("[[[]]]", json::parse_options{.max_depth = 2});
+        return 32;
+    } catch (const json::error&) {
+        // expected
+    }
 
     std::println("JSON SMOKE: PASS");
     return 0;

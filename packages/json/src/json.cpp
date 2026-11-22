@@ -9,11 +9,33 @@ namespace detail {
 struct parser {
     std::string_view src;
     std::size_t pos = 0;
+    std::size_t max_depth = 128;
+    std::size_t depth = 0;
 
-    [[noreturn]] void fail(const char* what) {
-        throw error(std::string("cboot.json: ") + what + " at offset "
-                    + std::to_string(pos));
+    [[noreturn]] void fail(std::string_view what) {
+        // 行列按当前 pos 计算；源文本只做一次线性扫描（错误路径）
+        std::size_t line = 1;
+        std::size_t column = 1;
+        const std::size_t end = pos < src.size() ? pos : src.size();
+        for (std::size_t i = 0; i < end; ++i) {
+            if (src[i] == '\n') { ++line; column = 1; }
+            else ++column;
+        }
+        throw error(std::string("cboot.json: ") + std::string(what)
+                    + " at line " + std::to_string(line)
+                    + ", column " + std::to_string(column)
+                    + " (offset " + std::to_string(pos) + ")");
     }
+
+    /** @brief 对象/数组嵌套深度守卫；超过 max_depth 直接报错 */
+    struct depth_guard {
+        parser& p;
+        explicit depth_guard(parser& p) : p(p) {
+            if (p.depth >= p.max_depth) p.fail("maximum nesting depth exceeded");
+            ++p.depth;
+        }
+        ~depth_guard() { --p.depth; }
+    };
     void ws() {
         while (pos < src.size()) {
             char c = src[pos];
@@ -142,6 +164,7 @@ struct parser {
     }
 
     value parse_array() {
+        depth_guard guard{*this};
         expect('[');
         array out;
         ws();
@@ -157,6 +180,7 @@ struct parser {
     }
 
     value parse_object() {
+        depth_guard guard{*this};
         expect('{');
         object out;
         ws();
@@ -241,7 +265,11 @@ void dump_to(std::string& out, const value& v) {
 } // namespace detail
 
 value parse(std::string_view src) {
-    detail::parser p{src};
+    return parse(src, {});
+}
+
+value parse(std::string_view src, const parse_options& opts) {
+    detail::parser p{src, 0, opts.max_depth, 0};
     value v = p.parse_value();
     p.ws();
     if (p.pos != src.size()) p.fail("trailing characters");

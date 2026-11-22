@@ -14,14 +14,17 @@ import cboot.meta.reflect;    // for_each_member / enum 注册表（全局作用
  * 设计口径（"简洁高效轻量"）：
  *   - object 用 vector<pair> 保序（避免 map 节点开销；查找线性，
  *     配置/DTO 对象键数小）
- *   - 解析错误带偏移；\uXXXX 含代理对 → UTF-8
- *   - dump 紧凑形态；浮点取最短可往返精度
+ *   - 解析错误带行/列与偏移；嵌套深度上限默认 128
+ *   - \uXXXX 含代理对 → UTF-8；dump 紧凑；浮点取最短可往返精度
  *   - 反射绑定：成员名 ≡ JSON 键；未知键忽略、缺失键保持成员默认值
  *     （Spring @ConfigurationProperties 同语义）
+ *   - json::codec<T> 可为自定义类型提供 to_value / from_value
  *
  * 支持的成员类型（超出即编译错 fail-loud）：
  *   bool / 整数 / 浮点 / std::string / std::optional<U> / std::vector<U>
- *   / 枚举（按枚举名）/ 聚合体（递归成员遍历）
+ *   / std::map<std::string,V> / std::unordered_map<std::string,V>
+ *   / json::value / 枚举（按枚举名）/ 聚合体（递归成员遍历）
+ *   / 显式特化 json::codec<T> 的自定义类型
  */
 
 // ── 内部工具（模块作用域，不导出——export template 实例化可用）──────
@@ -33,6 +36,22 @@ template <template <class...> class TT, class... A>
 struct is_specialization<TT, TT<A...>> : std::true_type {};
 template <template <class...> class TT, class T>
 inline constexpr bool is_specialization_v = is_specialization<TT, T>::value;
+
+/** @brief std::string 键的 map / unordered_map（key → JSON object） */
+template <class T>
+struct string_map_traits {
+    static constexpr bool value = false;
+};
+template <class V, class C, class A>
+struct string_map_traits<std::map<std::string, V, C, A>> {
+    static constexpr bool value = true;
+};
+template <class V, class H, class E, class A>
+struct string_map_traits<std::unordered_map<std::string, V, H, E, A>> {
+    static constexpr bool value = true;
+};
+template <class T>
+inline constexpr bool is_string_map_v = string_map_traits<T>::value;
 
 } // namespace json::detail
 
@@ -97,15 +116,52 @@ public:
 };
 
 // ── 解析 / 序列化（实现在 src/json/json.cpp）───────────────────────────
-value parse(std::string_view src);
+
+/** @brief 解析选项；max_depth 限制对象/数组嵌套层数（防 DoS） */
+struct parse_options {
+    std::size_t max_depth = 128;
+};
+
+value parse(std::string_view src, const parse_options& opts = {});
 std::string dump(const value& v);
+
+// ── 自定义类型 codec ────────────────────────────────────────────────────
+
+/**
+ * @brief 自定义类型编解码特化点
+ *
+ *   template <>
+ *   struct json::codec<Money> {
+ *       static json::value to_value(const Money& m);
+ *       static Money from_value(const json::value& v);
+ *   };
+ *
+ * 特化必须在 get_to / from / write_to / get_as 实例化前可见。
+ * codec 优先于枚举/聚合体默认规则。
+ */
+template <class T>
+struct codec {};
+
+namespace detail {
+
+template <class T>
+concept has_codec = requires(const T& in, const value& v) {
+    { json::codec<T>::to_value(in) } -> std::same_as<value>;
+    { json::codec<T>::from_value(v) } -> std::same_as<T>;
+};
+template <class T>
+inline constexpr bool has_codec_v = has_codec<T>;
+
+} // namespace detail
 
 // ── 反射绑定（模板：定义须在接口单元，消费方可实例化）──────────────────
 
 /** @brief value → T（类型分派；不支持的成员类型编译错 fail-loud） */
 template <class T>
 void get_to(const value& v, T& out) {
-    if constexpr (std::is_same_v<T, bool>) {
+    if constexpr (std::is_same_v<T, value>) {
+        out = v;
+    } else if constexpr (std::is_same_v<T, bool>) {
         if (!v.is_bool()) throw error("cboot.json: expected bool");
         out = v.as_bool();
     } else if constexpr (std::is_integral_v<T>) {
@@ -133,6 +189,16 @@ void get_to(const value& v, T& out) {
             get_to(e, u);
             out.push_back(std::move(u));
         }
+    } else if constexpr (detail::is_string_map_v<T>) {
+        if (!v.is_object()) throw error("cboot.json: expected object");
+        out.clear();
+        for (const auto& [key, elem] : v.as_object()) {
+            typename T::mapped_type u{};
+            get_to(elem, u);
+            out.emplace(key, std::move(u));
+        }
+    } else if constexpr (detail::has_codec_v<T>) {
+        out = codec<T>::from_value(v);
     } else if constexpr (std::is_enum_v<T>) {
         if (!v.is_string()) throw error("cboot.json: expected enum name string");
         auto n = enum_from_name<T>(v.as_string());
@@ -153,15 +219,21 @@ void get_to(const value& v, T& out) {
 /** @brief value → T 便捷形态 */
 template <class T>
 T get_as(const value& v) {
-    T out{};
-    get_to(v, out);
-    return out;
+    if constexpr (detail::has_codec_v<T>) {
+        return codec<T>::from_value(v);
+    } else {
+        T out{};
+        get_to(v, out);
+        return out;
+    }
 }
 
 /** @brief T → value（get_to 的逆映射） */
 template <class T>
 value from(const T& in) {
-    if constexpr (std::is_same_v<T, bool>) {
+    if constexpr (std::is_same_v<T, value>) {
+        return in;
+    } else if constexpr (std::is_same_v<T, bool>) {
         return value(bool(in));
     } else if constexpr (std::is_integral_v<T>) {
         return value(std::int64_t(in));
@@ -176,6 +248,14 @@ value from(const T& in) {
         out.reserve(in.size());
         for (const auto& e : in) out.push_back(from(e));
         return value(std::move(out));
+    } else if constexpr (detail::is_string_map_v<T>) {
+        object out;
+        out.reserve(in.size());
+        for (const auto& [key, elem] : in)
+            out.emplace_back(key, from(elem));
+        return value(std::move(out));
+    } else if constexpr (detail::has_codec_v<T>) {
+        return codec<T>::to_value(in);
     } else if constexpr (std::is_enum_v<T>) {
         return value(std::string(enum_to_name(in)));
     } else if constexpr (std::is_aggregate_v<T> && !std::is_array_v<T>) {
@@ -365,6 +445,49 @@ inline void write_escaped(Out& out, std::string_view s) {
     out.push_back('"');
 }
 
+template <class Out, class T>
+void write_to(Out& out, const T& in);
+
+/** @brief value → 流式写出（codec 返回值 / 手动组合 value 时用） */
+template <class Out>
+void write_to(Out& out, const value& v) {
+    if (v.is_null()) {
+        out += "null";
+    } else if (v.is_bool()) {
+        out += v.as_bool() ? "true" : "false";
+    } else if (v.is_int()) {
+        char buf[32];
+        const auto r = std::to_chars(buf, buf + sizeof buf, v.as_int());
+        out.append(buf, r.ptr);
+    } else if (v.is_double()) {
+        char buf[32];
+        const auto r = std::to_chars(buf, buf + sizeof buf, v.as_double());
+        out.append(buf, r.ptr);
+    } else if (v.is_string()) {
+        write_escaped(out, v.as_string());
+    } else if (v.is_array()) {
+        out.push_back('[');
+        bool first = true;
+        for (const auto& e : v.as_array()) {
+            if (!first) out.push_back(',');
+            first = false;
+            write_to(out, e);
+        }
+        out.push_back(']');
+    } else if (v.is_object()) {
+        out.push_back('{');
+        bool first = true;
+        for (const auto& [key, e] : v.as_object()) {
+            if (!first) out.push_back(',');
+            first = false;
+            write_escaped(out, key);
+            out.push_back(':');
+            write_to(out, e);
+        }
+        out.push_back('}');
+    }
+}
+
 /**
  * @brief 流式序列化：T 直接写入 out（**不建 value 树**）
  *
@@ -399,6 +522,19 @@ void write_to(Out& out, const T& in) {
             write_to(out, e);
         }
         out.push_back(']');
+    } else if constexpr (detail::is_string_map_v<T>) {
+        out.push_back('{');
+        bool first = true;
+        for (const auto& [key, elem] : in) {
+            if (!first) out.push_back(',');
+            first = false;
+            write_escaped(out, key);
+            out.push_back(':');
+            write_to(out, elem);
+        }
+        out.push_back('}');
+    } else if constexpr (detail::has_codec_v<T>) {
+        write_to(out, codec<T>::to_value(in));
     } else if constexpr (std::is_enum_v<T>) {
         write_escaped(out, enum_to_name(in));
     } else if constexpr (std::is_aggregate_v<T> && !std::is_array_v<T>) {

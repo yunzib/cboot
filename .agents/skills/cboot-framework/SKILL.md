@@ -258,13 +258,18 @@ Response resp = r.dispatch("GET", "/users/42", "");
 ## JSON
 
 - 支持（绑定目标）：bool、整数、浮点、`std::string`、`optional<U>`、
-  `vector<U>`、枚举（按名）、聚合体（递归成员）。序列化额外支持
+  `vector<U>`、`std::map<std::string,V>`、`std::unordered_map<std::string,V>`、
+  `json::value`、枚举（按名）、聚合体（递归成员）。序列化额外支持
   `std::string_view`；`get_as` 不接受 string_view。超出范围编译错。
+- 自定义类型特化 `json::codec<T>`：提供
+  `static json::value to_value(const T&)` 与 `static T from_value(const json::value&)`；
+  优先于枚举/聚合体默认规则，特化须在使用前可见。
 - 热路径用 `json::write_to(out, dto)` 或 `json_response(dto)`：流式写、不建
   value 树。`Response::body` 是 `json::small_buffer<64>`（≤64 字节零堆分配，
   超出自动溢出到 `std::string`），可隐式转 `std::string_view`；赋值 `std::string`
   仍可用，但不要假设它是 `std::string`。
-- 需要值模型时用 `json::value` / `parse` / `dump` / `from` / `get_as<T>`。
+- 需要值模型时用 `json::value` / `parse` / `dump` / `from` / `get_as<T>`；
+  `parse` 错误消息带行/列与偏移，嵌套深度默认 128（`parse_options` 可调）。
 
 ## 切面（AOP）
 

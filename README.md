@@ -21,7 +21,8 @@
 - **REST**：Get/Post/Put/Delete/Patch、路径参数、JSON body、405 + Allow、413、keep-alive、pipelining。
 - **配置**：JSON 文件 + `${ENV:default}`；`[[=Config{"prefix"}]]` 通用配置 bean；
   `[[=Value{"key"}]]` 直接注入标量；`[[=Profile{"dev"}]]` 按 profile 条件装配。
-- **JSON**：反射流式序列化，不建 value 树；≤64 字节响应零堆分配。
+- **JSON**：反射流式序列化，不建 value 树；支持 map/unordered_map、
+  `json::codec<T>` 自定义类型；≤64 字节响应零堆分配。
 - **AOP**：编译期切面链，零代理、零虚调用。
 - **事件**：`[[=EventListener{}]]` + `ctx.publish` / 注入 `event_publisher`，
   同步派发、顺序稳定、异常隔离，可接 `aspect_chain`。
