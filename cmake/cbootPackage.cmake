@@ -70,6 +70,17 @@ function(cboot_package name)
         "MODULES;SOURCES;DEPENDS;TEST_SOURCES"
         ${ARGN})
 
+    # TIER 是声明式分类（文档/CI/诊断），不改变导出方式；
+    # 基础包只能是 foundation/runtime/bootstrap。
+    if(NOT ARG_TIER)
+        set(ARG_TIER foundation)
+    endif()
+    if(NOT ARG_TIER MATCHES "^(foundation|runtime|bootstrap)$")
+        message(FATAL_ERROR
+            "cboot_package(${name}): TIER must be foundation/runtime/bootstrap, "
+            "got '${ARG_TIER}'")
+    endif()
+
     cboot_package_target(${name}
         MODULES ${ARG_MODULES}
         SOURCES ${ARG_SOURCES}

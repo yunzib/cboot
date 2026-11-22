@@ -20,6 +20,15 @@ function(cboot_component name)
         message(FATAL_ERROR "cboot_component(${name}): VERSION is required")
     endif()
 
+    # TIER 是声明式分类；契约组件固定为 contract。
+    if(NOT ARG_TIER)
+        set(ARG_TIER contract)
+    endif()
+    if(NOT ARG_TIER STREQUAL "contract")
+        message(FATAL_ERROR
+            "cboot_component(${name}): TIER must be 'contract', got '${ARG_TIER}'")
+    endif()
+
     cboot_package_target(${name}
         MODULES ${ARG_MODULES}
         SOURCES ${ARG_SOURCES}
