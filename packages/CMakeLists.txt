@@ -18,7 +18,8 @@ add_subdirectory(web)
 add_subdirectory(app)
 
 # ── 契约组件 ────────────────────────────────────────────────────────────
-# 独立包 + 独立导出 + components 选择。Phase B 再接入；
-# 新增组件时先建目录，再在这里 add_subdirectory。
-#
+# 独立包 + 独立导出 + components 选择；新增组件时先建目录，再在这里注册。
+# 组件 target 始终构建；是否装配由应用 components 决定。
+add_subdirectory(schedule)
+
 # add_subdirectory(cache)

@@ -9,7 +9,7 @@ cboot 的 AOP 是**编译期展开的静态调用链**：没有运行时代理�
 |---|---|
 | `packages/aop/aop.cppm` | `call_info` / `AspectFor` / `aspect_chain` / `around` |
 | `packages/web/routing.cppm` | `router::mount`、handler 包装、`call_info` 生成 |
-| `test/aop_smoke.cpp` | 洋葱顺序、短路、异常、非 web、概念约束 |
+| `test/aop/aop_smoke.cpp` | 洋葱顺序、短路、异常、非 web、概念约束 |
 | `examples/standalone/main.cpp` | `RequestLog` 示例 |
 
 ---
@@ -342,7 +342,7 @@ static_assert(AspectFor<TraceAny, int, std::function<int()>>);
 
 ## 10. 测试
 
-`test/aop_smoke.cpp` 覆盖：
+`test/aop/aop_smoke.cpp` 覆盖：
 
 - 洋葱顺序：`enter:Api.hello` → handler → `leave:hello:200`
 - 短路：`Auth` 拒绝 403，外层 `Trace` 仍记录进入/退出

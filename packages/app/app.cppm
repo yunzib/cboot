@@ -186,16 +186,18 @@ consteval auto scan_visible_beans() {
     return std::pair{out, n};
 }
 
-/** @brief 清单执行器：容器构造（编译期拓扑序）→ 挂载路由（可带切面）→ 服务 */
-template <class L>
+/** @brief 清单执行器：容器构造 → 组件 hooks → 挂载路由（可带切面）→ 服务 */
+template <class Beans, class Hooks = type_list<>>
 struct boot_runner;
-template <class... Ts>
-struct boot_runner<type_list<Ts...>> {
+template <class... Ts, class... Hs>
+struct boot_runner<type_list<Ts...>, type_list<Hs...>> {
     template <class... As>
     static int boot(unsigned short port, std::size_t workers, server_io io,
                     std::size_t max_conns, const config::properties* cfg,
                     As... aspects) {
         context<Ts...> ctx(cfg);                  // 先构造：先于 server 启动
+        // 组件 hooks 在全部 bean 构造完后安装；先于 ctx 析构停止。
+        hook_scope<context<Ts...>, Hs...> hooks(ctx);
         server_config sc;
         sc.port = port;
         sc.workers = workers;
@@ -255,13 +257,358 @@ export template <class Tag = void>
 using auto_beans_t = [: auto_list_type<Tag>(
     std::make_index_sequence<auto_bean_count<Tag>()>{}) :];
 
+// ==================== 契约组件 ====================
+
+namespace detail {
+
+// 组件描述符 shape：beans 必有；dependencies/hooks 可缺省，存在时必须是 type_list
+template <class C, class = void>
+struct beans_list_ok : std::false_type {};
+template <class C>
+struct beans_list_ok<C, std::void_t<typename C::beans>>
+    : std::bool_constant<is_type_list_v<typename C::beans>> {};
+
+template <class C, class = void>
+struct dependencies_list_ok : std::true_type {};
+template <class C>
+struct dependencies_list_ok<C, std::void_t<typename C::dependencies>>
+    : std::bool_constant<is_type_list_v<typename C::dependencies>> {};
+
+template <class C, class = void>
+struct hooks_list_ok : std::true_type {};
+template <class C>
+struct hooks_list_ok<C, std::void_t<typename C::hooks>>
+    : std::bool_constant<is_type_list_v<typename C::hooks>> {};
+
+} // namespace detail
+
+/**
+ * @brief 组件描述符 shape：普通结构体带 beans，可选 dependencies / hooks
+ *
+ * 不是运行期接口；只约束描述符字段类型。真正的装配语义由
+ * component_closure_t / app_beans_t / app_hooks_t 在编译期展开。
+ */
+export template <class C>
+concept Component = detail::beans_list_ok<C>::value
+    && detail::dependencies_list_ok<C>::value
+    && detail::hooks_list_ok<C>::value;
+
+namespace detail {
+
+constexpr std::size_t component_capacity = 64;
+
+consteval bool is_type_list_info(std::meta::info t) {
+    return std::meta::has_template_arguments(t)
+        && std::meta::template_of(t) == ^^type_list;
+}
+
+consteval std::optional<std::meta::info> alias_target(
+    std::meta::info c, std::string_view name) {
+    for (auto m : std::meta::members_of(c, std::meta::access_context::unchecked()))
+        if (std::meta::is_type_alias(m) && std::meta::identifier_of(m) == name)
+            return std::meta::dealias(m);
+    return std::nullopt;
+}
+
+consteval std::string_view component_name(std::meta::info c) {
+    return std::meta::has_identifier(c) ? std::meta::identifier_of(c) : "?";
+}
+
+consteval bool is_component_shape(std::meta::info c) {
+    if (!std::meta::is_type(c) || std::meta::is_template(c)
+        || !std::meta::is_complete_type(c) || !std::meta::is_class_type(c))
+        return false;
+    auto beans = alias_target(c, "beans");
+    if (!beans || !is_type_list_info(*beans)) return false;
+    auto deps = alias_target(c, "dependencies");
+    if (deps && !is_type_list_info(*deps)) return false;
+    auto hooks = alias_target(c, "hooks");
+    if (hooks && !is_type_list_info(*hooks)) return false;
+    return true;
+}
+
+/** @brief 直接依赖的组件反射；缺失 dependencies 退化为空 */
+consteval auto component_deps(std::meta::info c) {
+    std::array<std::meta::info, component_capacity> out{};
+    std::size_t n = 0;
+    auto deps = alias_target(c, "dependencies");
+    if (!deps) return std::pair{out, n};
+    for (auto d : std::meta::template_arguments_of(*deps)) {
+        if (!is_component_shape(d))
+            throw std::define_static_string(
+                "cboot: component '" + std::string(component_name(c))
+                + "' depends on '" + std::string(component_name(d))
+                + "' which is not a Component");
+        if (n >= component_capacity)
+            throw std::define_static_string(
+                "cboot: component closure exceeded capacity "
+                + std::to_string(component_capacity));
+        out[n++] = d;
+    }
+    return std::pair{out, n};
+}
+
+template <class App>
+struct app_component_roots {
+    using type = type_list<>;
+};
+template <class App>
+    requires requires { typename App::components; }
+struct app_component_roots<App> {
+    using type = typename App::components;
+};
+
+template <class L>
+struct type_list_infos;
+template <class... Ts>
+struct type_list_infos<type_list<Ts...>> {
+    static constexpr std::array<std::meta::info, sizeof...(Ts)> value{^^Ts...};
+};
+
+/**
+ * @brief 组件闭包：DFS 后序，依赖在前、自身在后；菱形去重、环诊断
+ *
+ * 在应用 TU 实例化（依赖 App）；只处理描述符类型，不构造 bean。
+ */
+template <class App>
+consteval auto component_closure_impl() {
+    constexpr auto roots =
+        type_list_infos<typename app_component_roots<App>::type>::value;
+
+    std::array<std::meta::info, component_capacity> out{};
+    std::array<std::meta::info, component_capacity> stack{};
+    std::array<std::meta::info, component_capacity> seen{};
+    std::array<int, component_capacity> state{};
+    std::size_t n = 0;       // out 数量
+    std::size_t depth = 0;   // DFS 栈深度
+    std::size_t seen_n = 0;
+
+    auto index_of = [&](std::meta::info c) -> std::size_t {
+        for (std::size_t i = 0; i < seen_n; ++i)
+            if (seen[i] == c) return i;
+        if (seen_n >= component_capacity)
+            throw std::define_static_string(
+                "cboot: component closure exceeded capacity "
+                + std::to_string(component_capacity));
+        seen[seen_n] = c;
+        state[seen_n] = 0;
+        return seen_n++;
+    };
+
+    auto visit = [&](auto&& self, std::meta::info c) -> void {
+        if (!is_component_shape(c))
+            throw std::define_static_string(
+                "cboot: '" + std::string(component_name(c))
+                + "' is not a Component (missing beans/dependencies type list)");
+
+        const std::size_t idx = index_of(c);
+        if (state[idx] == 1) {                    // 回边 → 组件环
+            std::string msg = "cboot: component dependency cycle: ";
+            std::size_t start = 0;
+            while (start < depth && stack[start] != c) ++start;
+            for (std::size_t i = start; i < depth; ++i) {
+                msg += component_name(stack[i]);
+                msg += " -> ";
+            }
+            msg += component_name(c);
+            throw std::define_static_string(msg);
+        }
+        if (state[idx] == 2) return;              // 菱形依赖已访问
+
+        state[idx] = 1;
+        if (depth >= component_capacity)
+            throw std::define_static_string(
+                "cboot: component closure exceeded capacity "
+                + std::to_string(component_capacity));
+        stack[depth++] = c;
+
+        auto deps = component_deps(c);
+        for (std::size_t i = 0; i < deps.second; ++i)
+            self(self, deps.first[i]);
+
+        --depth;
+        state[idx] = 2;
+        if (n >= component_capacity)
+            throw std::define_static_string(
+                "cboot: component closure exceeded capacity "
+                + std::to_string(component_capacity));
+        out[n++] = c;                             // 后序：依赖先进入结果
+    };
+
+    for (auto r : roots) visit(visit, r);
+    return std::pair{out, n};
+}
+
+template <class App>
+consteval std::size_t component_count() {
+    return component_closure_impl<App>().second;
+}
+
+template <std::size_t I, class App>
+consteval std::meta::info component_at() {
+    return component_closure_impl<App>().first[I];
+}
+
+template <class App, std::size_t... I>
+consteval auto component_list_type(std::index_sequence<I...>) {
+    return ^^type_list<type_of_t<component_at<I, App>()>...>;
+}
+
+template <class L>
+struct component_beans_impl;
+template <class... Cs>
+struct component_beans_impl<type_list<Cs...>> {
+    using type = concat_t<typename Cs::beans...>;
+};
+
+template <class C>
+struct component_hooks_of {
+    using type = type_list<>;
+};
+template <class C>
+    requires requires { typename C::hooks; }
+struct component_hooks_of<C> {
+    using type = typename C::hooks;
+};
+
+template <class L>
+struct component_hooks_impl;
+template <class... Cs>
+struct component_hooks_impl<type_list<Cs...>> {
+    using type = concat_t<typename component_hooks_of<Cs>::type...>;
+};
+
+template <class L>
+struct components_valid;
+template <class... Cs>
+struct components_valid<type_list<Cs...>>
+    : std::bool_constant<(Component<Cs> && ...)> {};
+
+/**
+ * @brief 组件 bean 契约校验（编译期）
+ *
+ * - 完整、非模板类类型
+ * - 不能是全局命名空间直接成员（否则 import 即被自动扫描）
+ * - 必须有 [[=Bean{}]] 或 [[=Config{...}]]
+ * - 控制器类路由方法仍要求 [[=Bean{}]]
+ * - 同一组件 beans 列表不允许重复类型
+ */
+consteval void validate_component_beans(std::meta::info c) {
+    auto beans = alias_target(c, "beans");
+    if (!beans) return;
+
+    std::array<std::meta::info, scan_capacity> seen{};
+    std::size_t n = 0;
+
+    for (auto b : std::meta::template_arguments_of(*beans)) {
+        if (!std::meta::is_type(b) || std::meta::is_template(b)
+            || !std::meta::is_complete_type(b)
+            || !std::meta::is_class_type(b))
+            throw std::define_static_string(
+                "cboot: component '" + std::string(component_name(c))
+                + "' bean '" + std::string(component_name(b))
+                + "' must be a complete class type");
+
+        if (std::meta::parent_of(b) == global_ns())
+            throw std::define_static_string(
+                "cboot: component bean '" + std::string(component_name(b))
+                + "' must not be a direct member of the global namespace");
+
+        const bool annotated =
+            std::meta::annotations_of_with_type(b, ^^Bean).size() > 0
+            || std::meta::annotations_of_with_type(b, ^^Config).size() > 0;
+        if (!annotated)
+            throw std::define_static_string(
+                "cboot: component '" + std::string(component_name(c))
+                + "' bean '" + std::string(component_name(b))
+                + "' lacks [[=Bean{}]] or [[=Config{...}]]");
+
+        validate_route_owner(b);
+
+        for (std::size_t i = 0; i < n; ++i)
+            if (seen[i] == b)
+                throw std::define_static_string(
+                    "cboot: component '" + std::string(component_name(c))
+                    + "' lists bean '" + std::string(component_name(b))
+                    + "' more than once");
+
+        if (n >= scan_capacity)
+            throw std::define_static_string(
+                "cboot: component bean list exceeded capacity "
+                + std::to_string(scan_capacity));
+        seen[n++] = b;
+    }
+}
+
+template <class L>
+struct validate_components_impl;
+template <class... Cs>
+struct validate_components_impl<type_list<Cs...>> {
+    static consteval void run() {
+        (validate_component_beans(^^Cs), ...);
+    }
+};
+
+/** @brief type_list<Ts...> → 反射 info（保持 type_list 形状） */
+template <class L>
+struct list_info;
+template <class... Ts>
+struct list_info<type_list<Ts...>> {
+    static consteval std::meta::info make() { return ^^type_list<Ts...>; }
+};
+
+} // namespace detail
+
+/** @brief 应用声明的根组件清单；未声明退化为空 */
+export template <class App>
+using app_components_t = typename detail::app_component_roots<App>::type;
+
+/** @brief 组件闭包：依赖在前、自身在后 */
+export template <class App>
+using component_closure_t = [: detail::component_list_type<App>(
+    std::make_index_sequence<detail::component_count<App>()>{}) :];
+
+/** @brief 闭包内所有组件贡献的 bean（拼接） */
+export template <class L>
+using component_beans_t = typename detail::component_beans_impl<L>::type;
+
+/** @brief 闭包内所有组件贡献的 hooks（拼接） */
+export template <class L>
+using component_hooks_t = typename detail::component_hooks_impl<L>::type;
+
+namespace detail {
+
+/** @brief 合并清单 + 组件 bean 契约校验；返回 type_list 的反射 */
+template <class App>
+consteval std::meta::info app_beans_info() {
+    using closure = component_closure_t<App>;
+    validate_components_impl<closure>::run();
+    using merged = unique_t<concat_t<
+        auto_beans_t<App>,
+        component_beans_t<closure>>>;
+    return list_info<merged>::make();
+}
+
+} // namespace detail
+
+/** @brief 应用最终 bean 清单：自动扫描 bean + 组件 bean，按类型去重 */
+export template <class App>
+using app_beans_t = [: detail::app_beans_info<App>() :];
+
+/** @brief 应用最终 hooks 清单：组件闭包，按类型去重 */
+export template <class App>
+using app_hooks_t = unique_t<
+    component_hooks_t<component_closure_t<App>>>;
+
 // ==================== 启动器 ====================
 
 template <class App, class... As>
 int boot_via(unsigned short port, std::size_t workers, server_io io,
              std::size_t max_conns, const config::properties* cfg, As... aspects) {
-    // 扫描标签依赖调用方类型（App）：实例化推迟到调用点（见模块头纪律）
-    return detail::boot_runner<auto_beans_t<App>>::boot(
+    static_assert(detail::components_valid<app_components_t<App>>::value,
+                  "cboot: App::components must be a type_list of Components");
+    // 扫描/闭包标签依赖调用方类型（App）：实例化推迟到调用点（见模块头纪律）
+    return detail::boot_runner<app_beans_t<App>, app_hooks_t<App>>::boot(
         port, workers, io, max_conns, cfg, std::move(aspects)...);
 }
 

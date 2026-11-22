@@ -92,21 +92,6 @@ export struct Profile { bean_name name{}; };
  */
 export struct EventListener {};
 
-/**
- * @brief 定时任务方法：固定延迟重复执行（毫秒）
- *
- *   class Cleaner {
- *   public:
- *       [[=Scheduled{1000}]]                    // 1s
- *       [[=Scheduled{fixed_delay_ms = 500}]]    // 0.5s
- *       void tick();
- *   };
- *
- * 方法必须 public、非静态、无参数；首次执行在 delay 之后。
- * 任务异常记录后继续调度；容器析构时停止调度线程。
- */
-export struct Scheduled { std::int64_t fixed_delay_ms{}; };
-
 /** @brief 初始化回调（@PostConstruct）：bean 构造后、依赖者构造前调用（≤1 个） */
 export struct PostConstruct {};
 

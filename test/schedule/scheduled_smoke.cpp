@@ -1,8 +1,9 @@
 // 定时任务冒烟测试
 //
 // 覆盖：固定延迟调度、异常不杀死调度线程、析构停止调度、Profile 跳过。
-import cboot.core.annotations;
-import cboot.core.context;
+import cboot.core.annotations;   // Bean / Profile
+import cboot.core.context;        // context / hook_scope
+import cboot.schedule;            // Scheduled / schedule_hook
 import cboot.config;
 import std;
 
@@ -32,6 +33,8 @@ int main() {
         Tick::count = 0;
         Boom::threw = false;
         context<Boom, Tick> ctx;
+        // 调度器是组件 hook：必须在 context 构造完成后安装
+        hook_scope<decltype(ctx), schedule_hook> hooks(ctx);
         for (int i = 0; i < 200 && Tick::count < 2; ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         if (Tick::count < 2) return 1;
@@ -50,6 +53,7 @@ int main() {
         config::properties prod;
         prod.set("cboot.profiles.active", "prod");
         context<DevTick> ctx(&prod);
+        hook_scope<decltype(ctx), schedule_hook> hooks(ctx);
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         if (DevTick::count != 0) return 3;
     }

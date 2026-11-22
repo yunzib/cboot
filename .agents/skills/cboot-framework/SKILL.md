@@ -20,13 +20,15 @@ cboot 把 Spring 的运行时装配搬到编译期：注解在编译期被反射
 - 两类包：
   - **基础包**：`meta/json/config/core/aop/async/web/app`，随 `cboot` 一起
     安装导出，不参与应用 `components` 选择；
-  - **契约组件**：`cache/redis` 等，独立包 `cboot.<name>`，设计上由应用
-    `components` 选择。装配 API（`components`/`dependencies`/闭包）尚未接入
-    `application`；在机制落地前，不要在框架代码或示例中依赖这些字段。
+  - **契约组件**：`schedule/cache/redis` 等，独立包 `cboot.<name>`；
+    描述符声明 `beans` / `dependencies` / `hooks`，由应用 `components` 选择。
+    首个真实组件是 `cboot.schedule`（`Scheduled` 注解 + 调度 hook）。
 - `core` 是基础层，不是其他包的容器；依赖由 `target_link_libraries` 表达。
 - 模块分层：`app → web.server → routing/http → core/json/aop → meta`。
   契约组件依赖 `core`/`config`（需要路由时依赖 `web`），**不要依赖 `app`**；
   新增依赖时沿分层方向，不要反向 import。
+- 应用用 `using components = type_list<...>;` 选择根组件；框架在编译期算
+  依赖闭包，`app_beans_t` 合并扫描 bean + 组件 bean，`app_hooks_t` 收集 hooks。
 - 公共 target 名统一 `cboot::<name>`（如 `cboot::app`）；构建 target 名是
   `cboot_<name>`。旧 `cboot::cboot_app` 等兼容名已删除，不要恢复。
 - 单入口：`import cboot.app;` 已 re-export 全部框架词汇（Bean/Inject/路由/
@@ -42,7 +44,7 @@ cmake --preset gcc-release && cmake --build --preset gcc-release
 ctest --test-dir build-release --output-on-failure
 ```
 
-改动框架后 Debug/Release 都要过 22 项 ctest；负面用例（`negative_*.cpp`）是
+改动框架后 Debug/Release 都要过 24 项 ctest；负面用例（`negative_*.cpp`）是
 预期编译失败，不能“修好”。
 
 外部消费口径：
@@ -78,7 +80,10 @@ cboot_package(<pkg>
   只 `install(EXPORT CbootTargets)` 一次。
 - 契约组件用 `cboot_component(...)`：独立导出 `Cboot<Name>Targets`、
   独立包 `cboot.<name>`，包配置先 `find_dependency(cboot)`。
-  装配代码接入 `application` 前，不要依赖 `components` / `dependencies` 字段。
+  组件可贡献 `beans`，也可贡献 `hooks`；hook 类型提供嵌套
+  `template<class Ctx> struct instance`，`boot_runner` 在 context 构造完后
+  安装、析构前停止。直接 `context` 测试时用
+  `hook_scope<decltype(ctx), Hook> hooks(ctx);`，按 `Hooks...` 顺序构造。
 - 模块安装到 `share/cboot/modules/<pkg>/`；包配置在
   `share/cmake/cboot`（基础包）与 `share/cmake/cboot.<name>`（组件）。
 - 模块 provider 必须被消费方**直接链接**；interface 别名不能作为模块 provider。
@@ -135,7 +140,7 @@ int main() { return App{}.run(); }
 | `[[=Value{"key"}]]` | 构造器参数 | 直接注入标量配置（bool/数值/string/枚举） |
 | `[[=Profile{"name"}]]` | 类型 | 仅当 profile 激活时装配 |
 | `[[=EventListener{}]]` | 方法 | 订阅事件；参数类型即事件类型 |
-| `[[=Scheduled{ms}]]` | 方法 | 固定延迟定时任务（public/非静态/无参数） |
+| `[[=Scheduled{ms}]]` / `[[=Scheduled{.expression="..."}]]` | 方法 | 定时任务（契约组件 `cboot.schedule`；public/非静态/无参数） |
 | `[[=PostConstruct{}]]` | 成员函数 | 构造后、依赖者构造前调用 |
 | `[[=PreDestroy{}]]` | 成员函数 | 逆拓扑序销毁 |
 | `[[=Get{"/p"}]]` 等 | 成员函数 | 路由：Get/Post/Put/Delete/Patch |
@@ -288,13 +293,18 @@ struct App : application<App> {
   `chain.run(call_info{bean, method}, fn)`。
 - 边界：同步、进程内，无持久化/重试。
 
-## 定时任务
+## 定时任务（契约组件 cboot.schedule）
 
-- 方法用 `[[=Scheduled{1000}]]` / `[[=Scheduled{.fixed_delay_ms = 1000}]]` 标注；
-  public、非静态、无参数、delay > 0。
-- 单调度线程，固定延迟（执行完成后等待 delay）；首次在 delay 之后。
-- 任务异常写 stderr 后继续；容器析构 `request_stop` + `join`；Profile 未激活不注册。
-- 任务应短小；当前无 cron / 线程池。
+- 应用必须 `import cboot.schedule;` 并 `using components =
+  type_list<schedule_component>;`；未选择组件时注解不生效。
+- 方法用 `[[=Scheduled{1000}]]` / `[[=Scheduled{.fixed_delay_ms = 1000}]]`
+  固定延迟；`[[=Scheduled{.expression = "..."}]]` cron 表达式。
+- 方法必须 public、非静态、无参数；`fixed_delay_ms` 与 `expression` 二选一。
+- cron 支持 5 段（分 时 日 月 周）和 6 段（秒 分 时 日 月 周）；
+  `*`/`?`、范围、列表、步长；按本地时区；非法表达式编译期报错。
+- 单调度线程串行执行；任务异常写 stderr 后继续；hook 析构停止线程；
+  Profile 未激活不注册。
+- 任务应短小；当前无任务线程池。
 
 ## 健康检查
 
@@ -313,17 +323,19 @@ struct App : application<App> {
 
 ## 测试与新增功能
 
-- 冒烟测试在 `test/*_smoke.cpp`：`import cboot...`，失败用不同返回码，
-  `main` 返回非 0 即失败。新增路由/绑定/DI 行为时照此加用例。
+- 冒烟测试按类别放 `test/<category>/*_smoke.cpp`
+  （meta/core/app/schedule/json/config/aop/async/web）：`import cboot...`，
+  失败用不同返回码，`main` 返回非 0 即失败。
 - 网络测试用临时端口（`server(0)` / `server.port = 0`）并轮询 `wait_status`，
   不要固定 sleep；IOCP 用例要与 threads 后端各跑一遍。
-- 负面用例放 `test/negative_*.cpp`，在 CMake 里注册为“预期编译失败”；
+- 负面用例放 `test/negative/negative_*.cpp`，在 CMake 里注册为“预期编译失败”；
   改错误信息时同步更新它们的注释。
 - 跨包回归测试在根 `test/`；包内测试用
   `cboot_package(... TEST_SOURCES test/<pkg>_smoke.cpp)`，测试目标会自动
   直接链接本包 `DEPENDS` 的 provider target。
-- 改公开 API 后同时更新 `README.md`、`docs/使用手册.md` 与
-  `docs/契约组件.md` 的用法/状态；`docs/任务清单.md` 是本地忽略文件，按需更新。
+- 改公开 API 后同时更新 `README.md`、`docs/使用手册.md`、
+  `docs/契约组件.md` 与 `docs/定时任务.md`；`docs/任务清单.md`
+  是本地忽略文件，按需更新。
 
 ## GCC 16 反射/模块排错清单
 

@@ -92,6 +92,65 @@ void for_each_member(const P& obj, F&& f) {
 export template <class... Ts>
 struct type_list {};
 
+// 注：类模板偏特化不能置于无花括号 export 声明中——统一用 export{} 块
+export {
+
+/** @brief L 是否 type_list<...>（组件描述符字段校验用） */
+template <class L>
+struct is_type_list : std::false_type {};
+template <class... Ts>
+struct is_type_list<type_list<Ts...>> : std::true_type {};
+template <class L>
+inline constexpr bool is_type_list_v = is_type_list<L>::value;
+
+/** @brief 多个 type_list 顺序拼接；concat_t<> == type_list<> */
+template <class... Ls>
+struct concat_lists;
+
+template <>
+struct concat_lists<> { using type = type_list<>; };
+
+template <class... Ts>
+struct concat_lists<type_list<Ts...>> { using type = type_list<Ts...>; };
+
+template <class... As, class... Bs, class... Rest>
+struct concat_lists<type_list<As...>, type_list<Bs...>, Rest...> {
+    using type = typename concat_lists<type_list<As..., Bs...>, Rest...>::type;
+};
+
+template <class... Ls>
+using concat_t = typename concat_lists<Ls...>::type;
+
+/** @brief T 是否出现在 L 中 */
+template <class T, class L>
+struct type_list_contains : std::false_type {};
+template <class T, class... Ts>
+struct type_list_contains<T, type_list<Ts...>>
+    : std::bool_constant<(std::is_same_v<T, Ts> || ...)> {};
+
+/** @brief 按类型去重，保留首次出现顺序（组件闭包/bean 合并共用） */
+template <class In, class Acc = type_list<>>
+struct unique_impl;
+
+template <class... Us>
+struct unique_impl<type_list<>, type_list<Us...>> {
+    using type = type_list<Us...>;
+};
+
+template <class T, class... Ts, class... Us>
+struct unique_impl<type_list<T, Ts...>, type_list<Us...>> {
+    using next = std::conditional_t<
+        type_list_contains<T, type_list<Us...>>::value,
+        type_list<Us...>,
+        type_list<Us..., T>>;
+    using type = typename unique_impl<type_list<Ts...>, next>::type;
+};
+
+template <class L>
+using unique_t = typename unique_impl<L>::type;
+
+} // export {
+
 // ==================== info → type 桥接（GCC16 splice 模板实参限制的解）=====
 
 /**

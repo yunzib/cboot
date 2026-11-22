@@ -1,5 +1,12 @@
 # 更新日志
 
+# 0.2.0 — 2026-11-22
+
+### 新增
+- 契约组件装配：`Component` / `components` / `dependencies`、编译期闭包、
+  组件 `hooks`、`app_beans_t` / `app_hooks_t`。
+- 定时任务拆为契约组件 `cboot.schedule`，支持固定延迟和 5/6 段 cron 表达式。
+
 # 0.1.1 — 2026-11-22
 
 ### 重构

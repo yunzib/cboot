@@ -12,7 +12,7 @@ cboot 的事件总线是**进程内、同步、编译期收集监听者**的事�
 |---|---|
 | `packages/core/annotations.cppm` | `EventListener` 注解 |
 | `packages/core/context.cppm` | 监听者收集、`event_publisher`、`publish`、异常隔离 |
-| `test/event_smoke.cpp` | 顺序、精确匹配、异常、切面、Profile、publisher 注入 |
+| `test/core/event_smoke.cpp` | 顺序、精确匹配、异常、切面、Profile、publisher 注入 |
 
 ---
 

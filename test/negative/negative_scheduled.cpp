@@ -2,6 +2,7 @@
 // 诊断："cboot: scheduled 'Bad.task' must take no parameters"
 import cboot.core.annotations;
 import cboot.core.context;
+import cboot.schedule;
 import std;
 
 class [[=Bean{}]] Bad {
@@ -11,4 +12,6 @@ public:
 
 int main() {
     context<Bad> ctx;
+    // 校验由 schedule hook 在实例化时触发
+    hook_scope<decltype(ctx), schedule_hook> hooks(ctx);
 }

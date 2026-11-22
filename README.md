@@ -25,7 +25,9 @@
 - **AOP**：编译期切面链，零代理、零虚调用。
 - **事件**：`[[=EventListener{}]]` + `ctx.publish` / 注入 `event_publisher`，
   同步派发、顺序稳定、异常隔离，可接 `aspect_chain`。
-- **定时**：`[[=Scheduled{ms}]]` 固定延迟任务，单调度线程、异常隔离、停机取消。
+- **契约组件**：`components` / `dependencies` 编译期装配，组件可贡献 bean 与 hooks；
+  首个组件 `cboot.schedule`。
+- **定时**：`[[=Scheduled{...}]]` 固定延迟 / 5/6 段 cron，单调度线程、异常隔离、停机取消。
 - **运维**：内建 `GET /health`（200/503 + JSON）、`GET /beans`（仅 dev）。
 - **传输**：threads / IOCP / epoll；万级连接、背压 503、handler 超时 504、优雅停机。
 - **协程**：`task<T>` / `sync_wait`；handler 可返回 `task<Response>`。
@@ -201,6 +203,7 @@ Release 构建、8 连接、16 万请求、0 失败：
 - [AOP 切面](docs/AOP.md)
 - [事件总线](docs/EventBus.md)
 - [契约组件](docs/契约组件.md)
+- [定时任务](docs/定时任务.md)
 - [更新日志](docs/CHANGELOG.md)
 - [性能测试与 Java 对拍](docs/性能测试.md)
 - [完整示例（独立应用：安装 SDK + find_package + class）](examples/standalone/README.md)
@@ -209,9 +212,9 @@ Release 构建、8 连接、16 万请求、0 失败：
 
 ```
 packages/  同级包：meta/json/config/core/aop/async/web/app
-           每包自带接口单元与 src/；测试当前集中在根 test/
+           另有契约组件 schedule；每包自带接口单元与 src/
 cmake/     包构建 helper（cboot_package / cboot_component）
-test/      跨包冒烟与负面编译用例
+test/      按类别归类的冒烟测试；negative/ 负面用例、bench/ 压测
 examples/  使用示例
 ```
 

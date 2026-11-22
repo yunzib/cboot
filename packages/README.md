@@ -11,6 +11,7 @@
 | 契约组件 | `cboot_component(...)` | 是；独立包 `cboot.<name>` |
 
 基础包：`meta`、`json`、`config`、`core`、`aop`、`async`、`web`、`app`。
+契约组件：`schedule`（固定延迟 / cron，贡献 hook，不贡献 bean）。
 `core` 特殊在职责（注解/DI 容器）和依赖位置，不是其他包的父目录。
 
 ## 包内布局
