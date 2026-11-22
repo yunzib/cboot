@@ -5,6 +5,7 @@
 ### 新增
 - 编译期 DI：`[[=Bean{}]]`、构造器注入、拓扑排序、生命周期与编译期诊断。
 - `[[=Named{"name"}]]` 同基类多实例；`[[=Value{"key"}]]` 标量配置注入。
+- `[[=Profile{"name"}]]` 条件装配：`cboot.profiles.active` 控制 bean 是否构造/挂载。
 - JSON 配置、反射 JSON、REST 路由、编译期 AOP、协程 handler。
 - threads / IOCP / epoll 三后端：keep-alive、pipelining、背压、超时、优雅停机。
 - `application<App>` 自动发现、`find_package(cboot)`。
@@ -18,4 +19,4 @@
 - 压测客户端 RST 关闭，避免 TIME_WAIT 耗尽临时端口。
 
 ### 测试
-- 18 项 ctest，Debug/Release 全绿；7 个负面用例锁定诊断。
+- 19 项 ctest，Debug/Release 全绿；7 个负面用例锁定诊断。

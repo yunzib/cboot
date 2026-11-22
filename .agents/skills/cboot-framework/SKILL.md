@@ -28,7 +28,7 @@ cmake --preset gcc-release && cmake --build --preset gcc-release
 ctest --test-dir build-release --output-on-failure
 ```
 
-改动框架后 Debug/Release 都要过 18 项 ctest；负面用例（`negative_*.cpp`）是
+改动框架后 Debug/Release 都要过 19 项 ctest；负面用例（`negative_*.cpp`）是
 预期编译失败，不能“修好”。
 
 ## 最小应用
@@ -79,6 +79,7 @@ int main() { return App{}.run(); }
 | `[[=Inject{}]]` | 构造器 | 多构造器时指定注入用者 |
 | `[[=Named{"name"}]]` | 构造器参数 | 多个同基类实例中按 bean 名选择 |
 | `[[=Value{"key"}]]` | 构造器参数 | 直接注入标量配置（bool/数值/string/枚举） |
+| `[[=Profile{"name"}]]` | 类型 | 仅当 profile 激活时装配 |
 | `[[=PostConstruct{}]]` | 成员函数 | 构造后、依赖者构造前调用 |
 | `[[=PreDestroy{}]]` | 成员函数 | 逆拓扑序销毁 |
 | `[[=Get{"/p"}]]` 等 | 成员函数 | 路由：Get/Post/Put/Delete/Patch |
@@ -145,6 +146,8 @@ struct [[=Config{"db"}]] DbProps {
 - 标量参数用 `[[=Value{"db.pool_size"}]] int pool` 直接注入；支持
   bool/整数/浮点/string/枚举，参数按值或 const&。缺配置/缺键/值非法 →
   启动期报错；非标量、空 key、与 `Named` 同用 → 编译错。Value 参数不参与依赖图。
+- `[[=Profile{"dev"}]]` 按 `cboot.profiles.active`（逗号分隔）条件装配：
+  未激活 bean 不构造、不挂载、不可注入；激活 bean 依赖未激活 bean → 启动期报错。
 - 生命周期：先按拓扑序构造全部 bean，再按同序调用 `PostConstruct`；
   停机逆序 `PreDestroy`。依赖者的 `PostConstruct` 一定在被依赖者之后。
 - 编译期诊断：缺失依赖给出 `'A' requires 'B'`；循环给出
@@ -186,6 +189,7 @@ Response resp = r.dispatch("GET", "/users/42", "");
 - 绑定按成员名匹配键尾段；缺失键保留成员默认值；`optional` 缺键为 nullopt；
   `vector` 支持逗号分隔或索引键。
 - 构造器标量参数也可用 `[[=Value{"key"}]]` 注入（见 DI 一节），不必写配置结构体。
+- Profile 激活列表：`cboot.profiles.active`（逗号分隔，`[[=Profile{"name"}]]` 使用）。
 - 服务端键：`server.port`、`server.io`（threads/iocp/epoll）、`server.workers`、
   `server.max_connections`、`server.handler_timeout_ms`、`server.send_timeout_ms`。
 - Windows 上选 `epoll` 会明确报错（需 Linux 构建）；`iocp` 仅 Windows。

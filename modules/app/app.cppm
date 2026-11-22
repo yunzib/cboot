@@ -138,9 +138,13 @@ struct boot_runner<type_list<Ts...>> {
         }
         server s(sc);
         install_stop_handler(s);                  // Ctrl+C / 关闭 → 优雅停机
-        // 按清单下标挂载：同基类的多个 bean 用类型 get 会歧义
+        // 按清单下标挂载：同基类的多个 bean 用类型 get 会歧义；
+        // 未激活 profile 的 bean 不挂载。
         [&]<std::size_t... Is>(std::index_sequence<Is...>) {
-            (s.mount(ctx.template get_at<Is>(), aspects...), ...);
+            ([&] {
+                if (ctx.template is_active<Is>())
+                    s.mount(ctx.template get_at<Is>(), aspects...);
+            }(), ...);
         }(std::make_index_sequence<sizeof...(Ts)>{});
         int rc = s.run();
         remove_stop_handler();

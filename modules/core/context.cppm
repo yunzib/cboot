@@ -171,6 +171,14 @@ inline constexpr bean_name bean_name_of = []() consteval {
     return bean_name{};
 }();
 
+/** @brief bean 的 Profile 名（无注解 = 空，始终激活） */
+template <class T>
+inline constexpr bean_name profile_of = []() consteval {
+    for (auto a : std::meta::annotations_of_with_type(^^T, ^^Profile))
+        return std::meta::extract<Profile>(a).name;
+    return bean_name{};
+}();
+
 /** @brief 依赖 D 能否绑定到候选 B：同类型，或 B 可转换为 D（public 基类） */
 template <class D, class B>
 consteval bool bean_matches() {
@@ -593,15 +601,23 @@ export template <class... Beans>
 class context {
 public:
     /** @brief cfg：应用配置（nullptr = 无；bean 构造器注入 const config::properties&） */
-    explicit context(const config::properties* cfg = nullptr) : cfg_(cfg) { build_all(); }
+    explicit context(const config::properties* cfg = nullptr) : cfg_(cfg) {
+        init_profiles();
+        build_all();
+    }
     ~context() { pre_destroy_all(); }
     context(const context&) = delete;
     context& operator=(const context&) = delete;
+
+    /** @brief 清单下标 I 的 bean 在当前 profile 下是否激活 */
+    template <std::size_t I>
+    bool is_active() const { return active_[I]; }
 
     /** @brief 按类型取 bean（唯一候选，或候选中的唯一默认实例） */
     template <class T>
     T& get() {
         constexpr std::size_t I = detail::select_default_index<T, Beans...>();
+        if (!active_[I]) throw inactive_error<bean_t<I>>();
         auto& p = std::get<I>(beans_);
         if (!p) throw std::runtime_error("cboot: bean not constructed");
         return static_cast<T&>(*p);
@@ -612,12 +628,13 @@ public:
     T& get(std::string_view name) {
         if (T* p = find_named<T>(name)) return *p;
         throw std::runtime_error(
-            "cboot: no bean named '" + std::string(name) + "'");
+            "cboot: no active bean named '" + std::string(name) + "'");
     }
 
     /** @brief 按清单下标取（挂载全部 bean 用，绕过类型歧义） */
     template <std::size_t I>
     auto& get_at() {
+        if (!active_[I]) throw inactive_error<bean_t<I>>();
         auto& p = std::get<I>(beans_);
         if (!p) throw std::runtime_error("cboot: bean not constructed");
         return *p;
@@ -634,7 +651,7 @@ private:
         if constexpr (I < sizeof...(Beans)) {
             using B = bean_t<I>;
             if constexpr (detail::bean_matches<T, B>()) {
-                if (detail::bean_name_of<B>.view() == name)
+                if (active_[I] && detail::bean_name_of<B>.view() == name)
                     return static_cast<T*>(std::get<I>(beans_).get());
             }
             return find_named<T, I + 1>(name);
@@ -645,12 +662,80 @@ private:
 
     std::tuple<std::unique_ptr<Beans>...> beans_{};
     const config::properties* cfg_ = nullptr;
+    std::array<bool, sizeof...(Beans)> active_{};
+    std::vector<std::string> active_profiles_;
+
+    // ── profile 过滤（配置 cboot.profiles.active，逗号分隔）────────────────
+
+    static std::string_view trim_profile(std::string_view s) {
+        while (!s.empty() && (s.front() == ' ' || s.front() == '\t'))
+            s.remove_prefix(1);
+        while (!s.empty() && (s.back() == ' ' || s.back() == '\t'))
+            s.remove_suffix(1);
+        return s;
+    }
+
+    void init_profiles() {
+        if (cfg_) {
+            if (auto v = cfg_->get_expanded("cboot.profiles.active")) {
+                std::string_view s(*v);
+                while (!s.empty()) {
+                    const std::size_t comma = s.find(',');
+                    std::string_view part = comma == std::string_view::npos
+                        ? s : s.substr(0, comma);
+                    part = trim_profile(part);
+                    if (!part.empty()) active_profiles_.emplace_back(part);
+                    if (comma == std::string_view::npos) break;
+                    s.remove_prefix(comma + 1);
+                }
+            }
+        }
+        [&]<std::size_t... I>(std::index_sequence<I...>) {
+            ((active_[I] = profile_active<bean_t<I>>()), ...);
+        }(std::make_index_sequence<sizeof...(Beans)>{});
+    }
+
+    template <class T>
+    bool profile_active() const {
+        constexpr std::string_view p = detail::profile_of<T>.view();
+        if (p.empty()) return true;
+        for (const auto& a : active_profiles_)
+            if (std::string_view(a) == p) return true;
+        return false;
+    }
+
+    std::string profiles_text() const {
+        if (active_profiles_.empty()) return "<none>";
+        std::string out;
+        for (std::size_t i = 0; i < active_profiles_.size(); ++i) {
+            if (i) out += ',';
+            out += active_profiles_[i];
+        }
+        return out;
+    }
+
+    template <class T>
+    std::runtime_error inactive_error() const {
+        return std::runtime_error(
+            "cboot: bean '" + std::string(detail::type_name_of<T>())
+            + "' is inactive under profile (active: " + profiles_text() + ")");
+    }
+
+    template <class Owner, class Dep>
+    std::runtime_error inactive_dep_error() const {
+        return std::runtime_error(
+            "cboot: bean '" + std::string(detail::type_name_of<Owner>())
+            + "' requires '" + std::string(detail::type_name_of<Dep>())
+            + "' which is inactive under profile (active: "
+            + profiles_text() + ")");
+    }
 
     // ── 构造 + PostConstruct（拓扑序逐 bean）────────────────────────────
 
     void build_all() {
         constexpr auto order = detail::topo_order<Beans...>();
         for (std::size_t k = 0; k < order.size(); ++k) {
+            if (!active_[order[k]]) continue;
             construct_indexed(order[k]);
             post_construct_indexed(order[k]);
         }
@@ -730,6 +815,8 @@ private:
             } else {
                 constexpr std::size_t I =
                     detail::resolve_dep_index<T, J, Beans...>();
+                if (!active_[I])
+                    throw inactive_dep_error<T, bean_t<I>>();
                 auto& p = std::get<I>(beans_);
                 if (!p) throw std::runtime_error("cboot: dependency null (topo order bug)");
                 return *p;

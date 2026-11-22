@@ -69,6 +69,16 @@ export struct Named { bean_name name{}; };
  */
 export struct Value { bean_name key{}; };
 
+/**
+ * @brief 条件装配：仅当 profile 激活时注册
+ *
+ *   struct [[=Profile{"dev"}]] DevSeeder { ... };
+ *
+ * 激活列表来自配置 `cboot.profiles.active`（逗号分隔，忽略空白）。
+ * 无 Profile 注解的 bean 始终激活；未激活 bean 不构造、不挂载、不可注入。
+ */
+export struct Profile { bean_name name{}; };
+
 /** @brief 初始化回调（@PostConstruct）：bean 构造后、依赖者构造前调用（≤1 个） */
 export struct PostConstruct {};
 

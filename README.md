@@ -20,7 +20,7 @@
 - **注解即注册**：`[[=Bean{}]]` 自动发现，零清单启动；控制器漏标直接编译错并指出类型名。
 - **REST**：Get/Post/Put/Delete/Patch、路径参数、JSON body、405 + Allow、413、keep-alive、pipelining。
 - **配置**：JSON 文件 + `${ENV:default}`；`[[=Config{"prefix"}]]` 通用配置 bean；
-  `[[=Value{"key"}]]` 直接注入标量。
+  `[[=Value{"key"}]]` 直接注入标量；`[[=Profile{"dev"}]]` 按 profile 条件装配。
 - **JSON**：反射流式序列化，不建 value 树；≤64 字节响应零堆分配。
 - **AOP**：编译期切面链，零代理、零虚调用。
 - **传输**：threads / IOCP / epoll；万级连接、背压 503、handler 超时 504、优雅停机。
@@ -149,7 +149,7 @@ cmake --build --preset gcc-release
 ## 4.2 测试
 
 ```bash
-ctest --preset gcc                  # 18 项：冒烟 + 负面编译用例
+ctest --preset gcc                  # 19 项：冒烟 + 负面编译用例
 ctest --test-dir build-release --output-on-failure
 ```
 
