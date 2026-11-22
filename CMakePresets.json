@@ -1,0 +1,48 @@
+{
+  "version": 8,
+  "cmakeMinimumRequired": {
+    "major": 4,
+    "minor": 3,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "gcc",
+      "displayName": "GCC 16.2（niXman，主工具链）——Debug 档",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "TRUE",
+        "CMAKE_CXX_COMPILER": "C:/software/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/bin/g++.exe"
+      }
+    },
+    {
+      "name": "gcc-release",
+      "displayName": "GCC 16.2（niXman，主工具链）——Release 档",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-release",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "TRUE",
+        "CMAKE_CXX_COMPILER": "C:/software/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/bin/g++.exe",
+        "CBOOT_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "gcc",
+      "configurePreset": "gcc"
+    },
+    {
+      "name": "gcc-release",
+      "configurePreset": "gcc-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "gcc",
+      "configurePreset": "gcc",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

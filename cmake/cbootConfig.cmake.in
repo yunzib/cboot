@@ -1,0 +1,25 @@
+@PACKAGE_INIT@
+
+# ── GCC16 反射：<meta> 由 __cpp_impl_reflection（-freflection）门控 ──
+# 注意：目标 PUBLIC 选项**不足以**覆盖 CMake 合成的 std 模块目标
+# （__cmake_cxx_std_26）——它须在目录级带旗标构建，否则 std::meta 缺席
+# std BMI。故在包配置里补目录级选项（find_package 应在 add_executable 之前）。
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    add_compile_options(-freflection)
+endif()
+
+# cboot 包配置：导入全部模块化目标（cboot::cboot_meta / cboot::cboot_core /
+# cboot::cboot_json / cboot::cboot_config / cboot::cboot_aop /
+# cboot::cboot_web / cboot::cboot_app）
+#
+# 消费方要求（GCC16 + CMake ≥ 4.3）：
+#   set(CMAKE_CXX_STANDARD 26)
+#   set(CMAKE_CXX_MODULE_STD ON)
+#   set(CMAKE_CXX_SCAN_FOR_MODULES ON)
+#   set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "451f2fe2-a8a2-47c3-bc32-94786d8fc91b")
+#   find_package(cboot REQUIRED)                        # 须在 add_executable 之前
+#   target_link_libraries(app PRIVATE cboot::cboot_app) # 或按需取子模块
+
+include("${CMAKE_CURRENT_LIST_DIR}/CbootTargets.cmake")
+
+check_required_components(cboot)

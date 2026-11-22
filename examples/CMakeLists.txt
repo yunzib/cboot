@@ -1,0 +1,2 @@
+add_executable(cboot_example_users users_api.cpp)
+target_link_libraries(cboot_example_users PRIVATE cboot_app cboot_config)
