@@ -1,7 +1,7 @@
 # AOP 切面
 
 cboot 的 AOP 是**编译期展开的静态调用链**：没有运行时代理、没有虚调用、没有每次请求的链分配。
-切入点只有路由 handler——也就是框架真正控制调用的地方。
+默认切入点是路由 handler；事件监听者可通过 `ctx.publish(event, wrap)` 显式接入同一条链。
 
 相关文件：
 
@@ -257,6 +257,23 @@ int v = chain.run(call_info{.bean = "Calc", .method = "add"},
 int v = around(aspect, ci, [] { return 42; });
 ```
 
+### 5.4 事件监听
+
+事件监听者不是路由，默认不经过切面；`ctx.publish(event, wrap)` 的 wrap 可在
+每个监听者调用外接链：
+
+```cpp
+aspect_chain<EventTrace> chain{EventTrace{}};
+ctx.publish(OrderPlaced{.id = 42},
+    [&](std::string_view bean, std::string_view method, auto&& fn) {
+        chain.run(call_info{bean, method}, fn);
+    });
+```
+
+监听者返回 void 时，切面写成 `void around(...)` 即可，`next()` 不返回值。
+
+事件总线的完整用法见 [EventBus.md](EventBus.md)。
+
 ---
 
 ## 6. 状态与并发
@@ -287,8 +304,8 @@ struct Counter {
 
 ## 7. 边界
 
-- **只织入路由 handler**：bean 之间的直接调用不经过切面（C++ 没有隐式代理）；
-  需要时显式用 `aspect_chain` 包裹
+- **默认织入路由 handler**：bean 之间的直接调用不经过切面（C++ 没有隐式代理）；
+  事件监听者通过 `ctx.publish(event, wrap)` 显式接链；其他场景用 `aspect_chain` 包裹
 - **around 是同步的**：handler 可以返回 `task<Response>`，但 `invoke` 内部用
   `sync_wait` 等它完成，切面看到的是阻塞后的 `Response`；切面链本身还没有
   `co_await` 转发

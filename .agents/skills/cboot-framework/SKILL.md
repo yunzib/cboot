@@ -28,7 +28,7 @@ cmake --preset gcc-release && cmake --build --preset gcc-release
 ctest --test-dir build-release --output-on-failure
 ```
 
-改动框架后 Debug/Release 都要过 19 项 ctest；负面用例（`negative_*.cpp`）是
+改动框架后 Debug/Release 都要过 20 项 ctest；负面用例（`negative_*.cpp`）是
 预期编译失败，不能“修好”。
 
 ## 最小应用
@@ -80,6 +80,7 @@ int main() { return App{}.run(); }
 | `[[=Named{"name"}]]` | 构造器参数 | 多个同基类实例中按 bean 名选择 |
 | `[[=Value{"key"}]]` | 构造器参数 | 直接注入标量配置（bool/数值/string/枚举） |
 | `[[=Profile{"name"}]]` | 类型 | 仅当 profile 激活时装配 |
+| `[[=EventListener{}]]` | 方法 | 订阅事件；参数类型即事件类型 |
 | `[[=PostConstruct{}]]` | 成员函数 | 构造后、依赖者构造前调用 |
 | `[[=PreDestroy{}]]` | 成员函数 | 逆拓扑序销毁 |
 | `[[=Get{"/p"}]]` 等 | 成员函数 | 路由：Get/Post/Put/Delete/Patch |
@@ -218,6 +219,19 @@ struct App : application<App> {
 ```
 - 每次 mount 复制一份链实例；切面里的计数器/窗口是跨请求共享的，需要同步时
   自己加锁。
+
+## 事件总线
+
+- 监听方法用 `[[=EventListener{}]]` 标注，必须 public、非静态、恰一个参数
+  （按值或 const 引用）；参数剥 cv/ref 后与事件类型精确相等，不走基类匹配。
+- `ctx.publish(event)` 同步派发，顺序为 bean 清单顺序 → 方法声明顺序；
+  未激活 Profile 的 bean 跳过。业务 bean 可注入内建依赖 `event_publisher&`
+  发布；它不在 bean 清单里，由容器绑定。
+- 监听者异常默认写 stderr 并继续；`set_event_error_handler` 可替换，
+  返回 `event_result{delivered, failed}`。
+- 切面包裹：`ctx.publish(ev, wrap)`，wrap 第三参接 `fn`：
+  `chain.run(call_info{bean, method}, fn)`。
+- 边界：同步、进程内，无持久化/重试。
 
 ## 协程
 

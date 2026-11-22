@@ -79,6 +79,19 @@ export struct Value { bean_name key{}; };
  */
 export struct Profile { bean_name name{}; };
 
+/**
+ * @brief 事件监听方法：参数类型即订阅的事件类型（精确匹配）
+ *
+ *   class Audit {
+ *   public:
+ *       [[=EventListener{}]] void on(const OrderPlaced& e);
+ *   };
+ *
+ * 方法必须 public、非静态、恰一个参数（按值或 const 引用）。
+ * 同一事件按 bean 清单顺序、方法声明顺序同步派发。
+ */
+export struct EventListener {};
+
 /** @brief 初始化回调（@PostConstruct）：bean 构造后、依赖者构造前调用（≤1 个） */
 export struct PostConstruct {};
 

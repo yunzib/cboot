@@ -24,10 +24,93 @@ import cboot.core.annotations;  // cboot::Inject / PostConstruct / PreDestroy ..
  * （constexpr 局部或 consteval 调用）/ 构造调用走重载决议（传精确参数类型
  * → 自动选中被反射选定的构造器，无需 splice 构造器本体）。
  */
+
+/** @brief 事件发布结果（同步派发：成功/失败监听者计数） */
+export struct event_result {
+    std::size_t delivered = 0;
+    std::size_t failed = 0;
+};
+
+/** @brief 监听者异常处理器：默认打印到 stderr 并继续后续监听者 */
+export using event_error_handler = std::function<void(
+    std::string_view bean, std::string_view method, std::string_view what)>;
+
+/**
+ * @brief 注入式事件发布器（容器提供，本身不是 bean）
+ *
+ *   class OrderService {
+ *   public:
+ *       OrderService(event_publisher& bus) : bus_(bus) {}
+ *       void place(int id) { bus_.publish(OrderPlaced{id}); }
+ *   private:
+ *       event_publisher& bus_;
+ *   };
+ *
+ * 事件类型 → 派发函数的映射由容器在启动时按监听者参数类型建立；
+ * 未注册的事件类型返回空结果（delivered=0）。
+ */
+export class event_publisher {
+public:
+    using dispatch_fn = event_result (*)(void*, const void*);
+    using dispatch_map = std::unordered_map<std::type_index, dispatch_fn>;
+
+    event_publisher() = default;
+    event_publisher(const event_publisher&) = delete;
+    event_publisher& operator=(const event_publisher&) = delete;
+
+    template <class E>
+    event_result publish(const E& e) const {
+        if (!map_) throw std::runtime_error("cboot: event_publisher not bound");
+        const auto it = map_->find(std::type_index(typeid(E)));
+        if (it == map_->end()) return {};
+        return it->second(ctx_, &e);
+    }
+
+    /** @brief 设置监听者异常处理器（默认写 stderr） */
+    void set_error_handler(event_error_handler h) {
+        error_ = std::move(h);
+    }
+
+    /** @internal 容器/派发路径调用 */
+    void report_error(std::string_view bean, std::string_view method,
+                      std::string_view what) const {
+        if (error_) {
+            try {
+                error_(bean, method, what);
+                return;
+            } catch (...) {
+                // 处理器自身失败不能打断事件派发——退回默认 stderr
+            }
+        }
+        std::cerr << "[cboot] event listener " << bean << "." << method
+                  << " failed: " << what << '\n';
+    }
+
+    /** @internal 容器启动时绑定 */
+    void bind(void* ctx, const dispatch_map* map) {
+        ctx_ = ctx;
+        map_ = map;
+    }
+
+private:
+    void* ctx_ = nullptr;
+    const dispatch_map* map_ = nullptr;
+    event_error_handler error_;
+};
+
 namespace detail {
 
 /** @brief 内建依赖：config::properties（由 app 加载后注入，不算 bean） */
 consteval bool is_config_dep(std::meta::info t) { return t == ^^config::properties; }
+
+/** @brief 内建依赖：event_publisher（由容器提供，不算 bean） */
+consteval bool is_event_publisher_dep(std::meta::info t) {
+    return t == ^^event_publisher;
+}
+
+consteval bool is_builtin_dep(std::meta::info t) {
+    return is_config_dep(t) || is_event_publisher_dep(t);
+}
 
 /** @brief consteval 十进制转换（std::to_string 在 libstdc++ 非 constexpr） */
 consteval std::string dec(std::size_t v) {
@@ -220,7 +303,80 @@ consteval auto type_names() {
     return a;
 }
 
-/** @brief 第 J 个构造器参数的 [[=Named{...}]] 名字（无注解 = 空） */
+// ── 事件监听方法枚举（编译期收集，publish 时按事件类型精确匹配）──────────
+
+template <class T>
+consteval bool is_listener(std::meta::info m) {
+    return std::meta::is_function(m) && std::meta::is_class_member(m)
+        && std::meta::annotations_of_with_type(m, ^^EventListener).size() > 0;
+}
+
+template <class T>
+consteval std::size_t listener_count() {
+    std::size_t n = 0;
+    for (auto m : std::meta::members_of(^^T, std::meta::access_context::unchecked()))
+        if (is_listener<T>(m)) ++n;
+    return n;
+}
+
+template <class T, std::size_t I>
+consteval std::meta::info nth_listener() {
+    std::size_t seen = 0;
+    for (auto m : std::meta::members_of(^^T, std::meta::access_context::unchecked())) {
+        if (is_listener<T>(m)) {
+            if (seen == I) return m;
+            ++seen;
+        }
+    }
+    throw "cboot: listener index out of range";
+}
+
+template <class T, std::size_t I>
+consteval std::meta::info listener_param() {
+    return strip_dep(std::meta::type_of(
+        std::meta::parameters_of(nth_listener<T, I>())[0]));
+}
+
+template <class T, std::size_t I>
+consteval std::string_view listener_name() {
+    return std::meta::identifier_of(nth_listener<T, I>());
+}
+
+/** @brief 监听方法契约：public、非静态、一个参数、按值或 const 引用 */
+template <class T>
+consteval void validate_listener() {
+    for (auto m : std::meta::members_of(^^T, std::meta::access_context::unchecked())) {
+        if (!is_listener<T>(m)) continue;
+        const std::string name = std::string(std::meta::identifier_of(^^T))
+            + "." + std::string(std::meta::identifier_of(m));
+        if (std::meta::is_static_member(m))
+            throw std::define_static_string(
+                "cboot: listener '" + name + "' must be a non-static member function");
+        if (!std::meta::is_public(m))
+            throw std::define_static_string(
+                "cboot: listener '" + name + "' must be public");
+        auto ps = std::meta::parameters_of(m);
+        if (ps.size() != 1)
+            throw std::define_static_string(
+                "cboot: listener '" + name
+                + "' must take exactly one event parameter");
+        const auto raw = std::meta::type_of(ps[0]);
+        if (std::meta::is_rvalue_reference_type(raw)
+            || (std::meta::is_lvalue_reference_type(raw)
+                && !std::meta::is_const_type(
+                    std::meta::remove_reference(raw))))
+            throw std::define_static_string(
+                "cboot: listener '" + name
+                + "' must take the event by value or const reference");
+    }
+}
+
+template <class... Bs>
+consteval void validate_listeners() {
+    (validate_listener<Bs>(), ...);
+}
+
+
 template <class T, std::size_t J>
 inline constexpr bean_name dep_qualifier = []() consteval {
     constexpr auto c = select_ctor<T>();
@@ -403,7 +559,7 @@ consteval bool dep_hits() {
         constexpr std::meta::info d = nth_dep<A, K>();
         if constexpr (dep_has_value<A, K>)
             return dep_hits<A, K + 1, J, Bs...>();
-        else if constexpr (is_config_dep(d))
+        if constexpr (is_builtin_dep(d))
             return dep_hits<A, K + 1, J, Bs...>();
         else if (resolve_dep_index<A, K, Bs...>() == J)
             return true;
@@ -462,7 +618,7 @@ consteval void check_dep() {
         return;
     }
     constexpr std::meta::info d = nth_dep<T, J>();
-    if constexpr (!is_config_dep(d)) (void)resolve_dep_index<T, J, Bs...>();
+    if constexpr (!is_builtin_dep(d)) (void)resolve_dep_index<T, J, Bs...>();
 }
 
 template <class T, class... Bs>
@@ -602,6 +758,11 @@ class context {
 public:
     /** @brief cfg：应用配置（nullptr = 无；bean 构造器注入 const config::properties&） */
     explicit context(const config::properties* cfg = nullptr) : cfg_(cfg) {
+        constexpr bool listeners_ok =
+            (detail::validate_listeners<Beans...>(), true);
+        (void)listeners_ok;
+        register_events();
+        publisher_.bind(this, &event_map_);
         init_profiles();
         build_all();
     }
@@ -640,6 +801,37 @@ public:
         return *p;
     }
 
+    /**
+     * @brief 发布事件：同步调用所有参数类型为 E 的监听方法
+     *
+     * 顺序：bean 清单顺序 → 方法声明顺序；未激活 bean 跳过。
+     * 监听者异常默认记录到 stderr 并继续，其他监听者不受影响。
+     */
+    template <class E>
+    event_result publish(const E& event) {
+        return publish(event, [](std::string_view, std::string_view,
+                                 auto&& fn) { fn(); });
+    }
+
+    /**
+     * @brief 发布事件并用 wrap 包裹每个监听者调用
+     *
+     *   wrap(bean, method, fn) 可调用 fn()，也可接 aspect_chain：
+     *     chain.run(call_info{b, m}, fn);
+     */
+    template <class E, class Wrap>
+    event_result publish(const E& event, Wrap&& wrap) {
+        event_result r;
+        publish_all(event, wrap, r,
+                    std::make_index_sequence<sizeof...(Beans)>{});
+        return r;
+    }
+
+    /** @brief 监听者异常处理（默认打印到 stderr 并继续） */
+    void set_event_error_handler(event_error_handler h) {
+        publisher_.set_error_handler(std::move(h));
+    }
+
 private:
     template <std::size_t I>
     using bean_t = typename std::tuple_element_t<I,
@@ -660,10 +852,88 @@ private:
         }
     }
 
+    // ── 事件派发（编译期按事件类型匹配，运行期同步调用）──────────────
+
+    /** @brief 为事件类型 E 注册类型擦除派发入口（注入式 publisher 使用） */
+    template <class E>
+    void register_event() {
+        event_map_[std::type_index(typeid(E))] =
+            [](void* self, const void* e) -> event_result {
+                return static_cast<context*>(self)->publish(
+                    *static_cast<const E*>(e));
+            };
+    }
+
+    template <class T, std::size_t J>
+    void register_listener_event() {
+        using E = type_of_t<detail::listener_param<T, J>()>;
+        register_event<E>();
+    }
+
+    template <std::size_t I = 0>
+    void register_events() {
+        if constexpr (I < sizeof...(Beans)) {
+            using T = bean_t<I>;
+            constexpr std::size_t N = detail::listener_count<T>();
+            [&]<std::size_t... J>(std::index_sequence<J...>) {
+                (register_listener_event<T, J>(), ...);
+            }(std::make_index_sequence<N>{});
+            register_events<I + 1>();
+        }
+    }
+
+    template <class E, class W, std::size_t... I>
+    void publish_all(const E& e, W& wrap, event_result& r,
+                     std::index_sequence<I...>) {
+        (publish_bean<I>(e, wrap, r), ...);
+    }
+
+    template <std::size_t I, class E, class W>
+    void publish_bean(const E& e, W& wrap, event_result& r) {
+        if (!active_[I]) return;
+        constexpr std::size_t N = detail::listener_count<bean_t<I>>();
+        [&]<std::size_t... J>(std::index_sequence<J...>) {
+            (publish_listener<I, J>(e, wrap, r), ...);
+        }(std::make_index_sequence<N>{});
+    }
+
+    template <std::size_t I, std::size_t J, class E, class W>
+    void publish_listener(const E& e, W& wrap, event_result& r) {
+        constexpr std::meta::info pt =
+            detail::listener_param<bean_t<I>, J>();
+        if constexpr (pt == ^^E) {
+            auto& p = std::get<I>(beans_);
+            if (!p) return;
+            constexpr std::string_view bean =
+                detail::type_name_of<bean_t<I>>();
+            constexpr std::string_view method =
+                detail::listener_name<bean_t<I>, J>();
+            constexpr std::meta::info fn =
+                detail::nth_listener<bean_t<I>, J>();
+            try {
+                wrap(bean, method, [&] { (*p).[:fn:](e); });
+                ++r.delivered;
+            } catch (const std::exception& ex) {
+                ++r.failed;
+                report_event_error(bean, method, ex.what());
+            } catch (...) {
+                ++r.failed;
+                report_event_error(bean, method, "unknown exception");
+            }
+        }
+    }
+
+    void report_event_error(std::string_view bean, std::string_view method,
+                            std::string_view what) const {
+        publisher_.report_error(bean, method, what);
+    }
+
     std::tuple<std::unique_ptr<Beans>...> beans_{};
     const config::properties* cfg_ = nullptr;
     std::array<bool, sizeof...(Beans)> active_{};
     std::vector<std::string> active_profiles_;
+    event_publisher::dispatch_map event_map_;
+    event_publisher publisher_;
 
     // ── profile 过滤（配置 cboot.profiles.active，逗号分隔）────────────────
 
@@ -812,6 +1082,8 @@ private:
                     throw std::runtime_error(
                         "cboot: config not provided (set application::config_path)");
                 return *cfg_;                       // const config::properties&
+            } else if constexpr (detail::is_event_publisher_dep(dep)) {
+                return (publisher_);                // event_publisher&
             } else {
                 constexpr std::size_t I =
                     detail::resolve_dep_index<T, J, Beans...>();

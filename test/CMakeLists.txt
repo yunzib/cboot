@@ -19,6 +19,10 @@ add_executable(cboot_profile_smoke profile_smoke.cpp)
 target_link_libraries(cboot_profile_smoke PRIVATE cboot_core)
 add_test(NAME profile_smoke COMMAND cboot_profile_smoke)
 
+add_executable(cboot_event_smoke event_smoke.cpp)
+target_link_libraries(cboot_event_smoke PRIVATE cboot_core cboot_aop)
+add_test(NAME event_smoke COMMAND cboot_event_smoke)
+
 add_executable(cboot_json_smoke json_smoke.cpp)
 target_link_libraries(cboot_json_smoke PRIVATE cboot_json)
 add_test(NAME json_smoke COMMAND cboot_json_smoke)
@@ -109,6 +113,9 @@ if(CBOOT_BUILD_NEGATIVE_TESTS)
 
     add_executable(cboot_neg_value_type negative_value_type.cpp)
     target_link_libraries(cboot_neg_value_type PRIVATE cboot_core)
+
+    add_executable(cboot_neg_event_listener negative_event_listener.cpp)
+    target_link_libraries(cboot_neg_event_listener PRIVATE cboot_core)
 endif()
 set_tests_properties(web_server_smoke PROPERTIES TIMEOUT 30)
-set_tests_properties(context_smoke named_smoke value_smoke profile_smoke json_smoke config_smoke web_routing_smoke smoke_reflect class_smoke aop_smoke autoscan_smoke async_smoke backend_select_smoke backpressure_smoke backpressure_iocp_smoke handler_timeout_smoke handler_timeout_iocp_smoke PROPERTIES TIMEOUT 30)
+set_tests_properties(context_smoke named_smoke value_smoke profile_smoke event_smoke json_smoke config_smoke web_routing_smoke smoke_reflect class_smoke aop_smoke autoscan_smoke async_smoke backend_select_smoke backpressure_smoke backpressure_iocp_smoke handler_timeout_smoke handler_timeout_iocp_smoke PROPERTIES TIMEOUT 30)
