@@ -25,6 +25,7 @@
 - **AOP**：编译期切面链，零代理、零虚调用。
 - **事件**：`[[=EventListener{}]]` + `ctx.publish` / 注入 `event_publisher`，
   同步派发、顺序稳定、异常隔离，可接 `aspect_chain`。
+- **定时**：`[[=Scheduled{ms}]]` 固定延迟任务，单调度线程、异常隔离、停机取消。
 - **传输**：threads / IOCP / epoll；万级连接、背压 503、handler 超时 504、优雅停机。
 - **协程**：`task<T>` / `sync_wait`；handler 可返回 `task<Response>`。
 - **工程**：C++20 命名模块 + `import std` + CMake 包（`find_package(cboot)`）。
@@ -151,7 +152,7 @@ cmake --build --preset gcc-release
 ## 4.2 测试
 
 ```bash
-ctest --preset gcc                  # 20 项：冒烟 + 负面编译用例
+ctest --preset gcc                  # 21 项：冒烟 + 负面编译用例
 ctest --test-dir build-release --output-on-failure
 ```
 

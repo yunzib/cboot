@@ -28,7 +28,7 @@ cmake --preset gcc-release && cmake --build --preset gcc-release
 ctest --test-dir build-release --output-on-failure
 ```
 
-改动框架后 Debug/Release 都要过 20 项 ctest；负面用例（`negative_*.cpp`）是
+改动框架后 Debug/Release 都要过 21 项 ctest；负面用例（`negative_*.cpp`）是
 预期编译失败，不能“修好”。
 
 ## 最小应用
@@ -81,6 +81,7 @@ int main() { return App{}.run(); }
 | `[[=Value{"key"}]]` | 构造器参数 | 直接注入标量配置（bool/数值/string/枚举） |
 | `[[=Profile{"name"}]]` | 类型 | 仅当 profile 激活时装配 |
 | `[[=EventListener{}]]` | 方法 | 订阅事件；参数类型即事件类型 |
+| `[[=Scheduled{ms}]]` | 方法 | 固定延迟定时任务（public/非静态/无参数） |
 | `[[=PostConstruct{}]]` | 成员函数 | 构造后、依赖者构造前调用 |
 | `[[=PreDestroy{}]]` | 成员函数 | 逆拓扑序销毁 |
 | `[[=Get{"/p"}]]` 等 | 成员函数 | 路由：Get/Post/Put/Delete/Patch |
@@ -232,6 +233,14 @@ struct App : application<App> {
 - 切面包裹：`ctx.publish(ev, wrap)`，wrap 第三参接 `fn`：
   `chain.run(call_info{bean, method}, fn)`。
 - 边界：同步、进程内，无持久化/重试。
+
+## 定时任务
+
+- 方法用 `[[=Scheduled{1000}]]` / `[[=Scheduled{.fixed_delay_ms = 1000}]]` 标注；
+  public、非静态、无参数、delay > 0。
+- 单调度线程，固定延迟（执行完成后等待 delay）；首次在 delay 之后。
+- 任务异常写 stderr 后继续；容器析构 `request_stop` + `join`；Profile 未激活不注册。
+- 任务应短小；当前无 cron / 线程池。
 
 ## 协程
 

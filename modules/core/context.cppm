@@ -376,6 +376,77 @@ consteval void validate_listeners() {
     (validate_listener<Bs>(), ...);
 }
 
+// ── 定时任务方法枚举（编译期收集，容器启动后单线程调度）────────────────
+
+template <class T>
+consteval bool is_scheduled(std::meta::info m) {
+    return std::meta::is_function(m) && std::meta::is_class_member(m)
+        && std::meta::annotations_of_with_type(m, ^^Scheduled).size() > 0;
+}
+
+template <class T>
+consteval std::size_t scheduled_count() {
+    std::size_t n = 0;
+    for (auto m : std::meta::members_of(^^T, std::meta::access_context::unchecked()))
+        if (is_scheduled<T>(m)) ++n;
+    return n;
+}
+
+template <class T, std::size_t I>
+consteval std::meta::info nth_scheduled() {
+    std::size_t seen = 0;
+    for (auto m : std::meta::members_of(^^T, std::meta::access_context::unchecked())) {
+        if (is_scheduled<T>(m)) {
+            if (seen == I) return m;
+            ++seen;
+        }
+    }
+    throw "cboot: scheduled index out of range";
+}
+
+consteval Scheduled scheduled_anno_of(std::meta::info m) {
+    for (auto a : std::meta::annotations_of_with_type(m, ^^Scheduled))
+        return std::meta::extract<Scheduled>(a);
+    return Scheduled{};
+}
+
+template <class T, std::size_t I>
+consteval Scheduled scheduled_anno() {
+    return scheduled_anno_of(nth_scheduled<T, I>());
+}
+
+template <class T, std::size_t I>
+consteval std::string_view scheduled_name() {
+    return std::meta::identifier_of(nth_scheduled<T, I>());
+}
+
+/** @brief 定时方法契约：public、非静态、无参数、delay > 0 */
+template <class T>
+consteval void validate_scheduled() {
+    for (auto m : std::meta::members_of(^^T, std::meta::access_context::unchecked())) {
+        if (!is_scheduled<T>(m)) continue;
+        const std::string name = std::string(std::meta::identifier_of(^^T))
+            + "." + std::string(std::meta::identifier_of(m));
+        if (std::meta::is_static_member(m))
+            throw std::define_static_string(
+                "cboot: scheduled '" + name + "' must be a non-static member function");
+        if (!std::meta::is_public(m))
+            throw std::define_static_string(
+                "cboot: scheduled '" + name + "' must be public");
+        if (!std::meta::parameters_of(m).empty())
+            throw std::define_static_string(
+                "cboot: scheduled '" + name + "' must take no parameters");
+        if (scheduled_anno_of(m).fixed_delay_ms <= 0)
+            throw std::define_static_string(
+                "cboot: scheduled '" + name + "' requires fixed_delay_ms > 0");
+    }
+}
+
+template <class... Bs>
+consteval void validate_scheduled_all() {
+    (validate_scheduled<Bs>(), ...);
+}
+
 
 template <class T, std::size_t J>
 inline constexpr bean_name dep_qualifier = []() consteval {
@@ -760,13 +831,21 @@ public:
     explicit context(const config::properties* cfg = nullptr) : cfg_(cfg) {
         constexpr bool listeners_ok =
             (detail::validate_listeners<Beans...>(), true);
+        constexpr bool scheduled_ok =
+            (detail::validate_scheduled_all<Beans...>(), true);
         (void)listeners_ok;
+        (void)scheduled_ok;
         register_events();
         publisher_.bind(this, &event_map_);
         init_profiles();
         build_all();
+        register_scheduled_tasks();
+        start_scheduler();
     }
-    ~context() { pre_destroy_all(); }
+    ~context() {
+        stop_scheduler();
+        pre_destroy_all();
+    }
     context(const context&) = delete;
     context& operator=(const context&) = delete;
 
@@ -928,12 +1007,121 @@ private:
         publisher_.report_error(bean, method, what);
     }
 
+    // ── 定时任务（单调度线程，固定延迟，任务异常隔离）────────────────────
+
+    struct scheduled_task {
+        std::function<void()> fn;
+        std::string name;
+        std::chrono::milliseconds delay{};
+        std::chrono::steady_clock::time_point next{};
+    };
+
+    template <std::size_t I, std::size_t J>
+    void run_scheduled() {
+        auto& p = std::get<I>(beans_);
+        if (!p) return;
+        (*p).[:detail::nth_scheduled<bean_t<I>, J>():]();
+    }
+
+    template <std::size_t I, std::size_t J>
+    void register_scheduled_task() {
+        constexpr auto anno = detail::scheduled_anno<bean_t<I>, J>();
+        auto& p = std::get<I>(beans_);
+        if (!p) return;
+        scheduled_task t;
+        t.fn = [this] { run_scheduled<I, J>(); };
+        t.name = std::string(detail::type_name_of<bean_t<I>>()) + "."
+               + std::string(detail::scheduled_name<bean_t<I>, J>());
+        t.delay = std::chrono::milliseconds(anno.fixed_delay_ms);
+        t.next = std::chrono::steady_clock::now() + t.delay;
+        scheduled_tasks_.push_back(std::move(t));
+    }
+
+    template <std::size_t I = 0>
+    void register_scheduled_tasks() {
+        if constexpr (I < sizeof...(Beans)) {
+            if (active_[I]) {
+                constexpr std::size_t N =
+                    detail::scheduled_count<bean_t<I>>();
+                [&]<std::size_t... J>(std::index_sequence<J...>) {
+                    (register_scheduled_task<I, J>(), ...);
+                }(std::make_index_sequence<N>{});
+            }
+            register_scheduled_tasks<I + 1>();
+        }
+    }
+
+    static void report_scheduled_error(std::string_view name,
+                                       std::string_view what) {
+        std::cerr << "[cboot] scheduled task " << name
+                  << " failed: " << what << '\n';
+    }
+
+    void scheduler_loop(std::stop_token st) {
+        std::unique_lock lock(sched_mu_);
+        while (!st.stop_requested()) {
+            if (scheduled_tasks_.empty()) return;
+            const auto next = std::min_element(
+                scheduled_tasks_.begin(), scheduled_tasks_.end(),
+                [](const auto& a, const auto& b) { return a.next < b.next; });
+            if (sched_cv_.wait_until(lock, st, next->next,
+                    [&] { return st.stop_requested(); }))
+                break;
+            if (st.stop_requested()) break;
+
+            struct due_task {
+                std::function<void()> fn;
+                std::string name;
+                std::size_t index;
+            };
+            const auto now = std::chrono::steady_clock::now();
+            std::vector<due_task> due;
+            for (std::size_t i = 0; i < scheduled_tasks_.size(); ++i)
+                if (scheduled_tasks_[i].next <= now)
+                    due.push_back({scheduled_tasks_[i].fn,
+                                   scheduled_tasks_[i].name, i});
+
+            lock.unlock();
+            for (auto& d : due) {
+                try {
+                    d.fn();
+                } catch (const std::exception& ex) {
+                    report_scheduled_error(d.name, ex.what());
+                } catch (...) {
+                    report_scheduled_error(d.name, "unknown exception");
+                }
+            }
+            const auto after = std::chrono::steady_clock::now();
+            lock.lock();
+            for (auto& d : due)
+                if (d.index < scheduled_tasks_.size())
+                    scheduled_tasks_[d.index].next =
+                        after + scheduled_tasks_[d.index].delay;
+        }
+    }
+
+    void start_scheduler() {
+        if (scheduled_tasks_.empty()) return;
+        scheduler_ = std::jthread(
+            [this](std::stop_token st) { scheduler_loop(st); });
+    }
+
+    void stop_scheduler() {
+        scheduler_.request_stop();
+        sched_cv_.notify_all();
+        if (scheduler_.joinable()) scheduler_.join();
+    }
+
     std::tuple<std::unique_ptr<Beans>...> beans_{};
     const config::properties* cfg_ = nullptr;
     std::array<bool, sizeof...(Beans)> active_{};
     std::vector<std::string> active_profiles_;
     event_publisher::dispatch_map event_map_;
     event_publisher publisher_;
+    std::vector<scheduled_task> scheduled_tasks_;
+    std::mutex sched_mu_;
+    std::condition_variable_any sched_cv_;
+    std::jthread scheduler_;
 
     // ── profile 过滤（配置 cboot.profiles.active，逗号分隔）────────────────
 
