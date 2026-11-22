@@ -1,0 +1,19 @@
+@PACKAGE_INIT@
+
+# 契约组件包配置：
+#   1. 先找 cboot —— 其配置在目录级注入 -freflection 并导入基础包 target
+#   2. 再找组件依赖（PACKAGE_DEPENDS 生成 find_dependency）
+#   3. 最后导入本组件的导出 target
+include(CMakeFindDependencyMacro)
+
+if(NOT TARGET cboot::core)
+    find_dependency(cboot)
+endif()
+
+set(CBOOT_COMPONENT_DEPENDS "@CBOOT_COMPONENT_DEPENDS@")
+foreach(dep IN LISTS CBOOT_COMPONENT_DEPENDS)
+    find_dependency(${dep})
+endforeach()
+
+include("${CMAKE_CURRENT_LIST_DIR}/@CBOOT_COMPONENT_EXPORT@.cmake")
+check_required_components(@CBOOT_COMPONENT_NAME@)

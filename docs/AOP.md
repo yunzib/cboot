@@ -7,8 +7,8 @@ cboot 的 AOP 是**编译期展开的静态调用链**：没有运行时代理�
 
 | 文件 | 内容 |
 |---|---|
-| `modules/aop/aop.cppm` | `call_info` / `AspectFor` / `aspect_chain` / `around` |
-| `modules/web/routing.cppm` | `router::mount`、handler 包装、`call_info` 生成 |
+| `packages/aop/aop.cppm` | `call_info` / `AspectFor` / `aspect_chain` / `around` |
+| `packages/web/routing.cppm` | `router::mount`、handler 包装、`call_info` 生成 |
 | `test/aop_smoke.cpp` | 洋葱顺序、短路、异常、非 web、概念约束 |
 | `examples/standalone/main.cpp` | `RequestLog` 示例 |
 

@@ -168,7 +168,8 @@ cmake --install build-release --prefix <prefix>
 
 ```cmake
 find_package(cboot REQUIRED)
-target_link_libraries(app PRIVATE cboot::cboot_app)
+# 模块 provider 必须直接链接
+target_link_libraries(app PRIVATE cboot::app)
 ```
 
 消费方需 `CMAKE_CXX_STANDARD 26`、`CMAKE_CXX_MODULE_STD ON`、
@@ -199,6 +200,7 @@ Release 构建、8 连接、16 万请求、0 失败：
 - [使用手册](docs/使用手册.md)
 - [AOP 切面](docs/AOP.md)
 - [事件总线](docs/EventBus.md)
+- [契约组件](docs/契约组件.md)
 - [更新日志](docs/CHANGELOG.md)
 - [性能测试与 Java 对拍](docs/性能测试.md)
 - [完整示例（独立应用：安装 SDK + find_package + class）](examples/standalone/README.md)
@@ -206,9 +208,10 @@ Release 构建、8 连接、16 万请求、0 失败：
 # 6. 目录
 
 ```
-modules/   接口单元（meta/core/json/config/aop/async/web/app）
-src/       实现单元
-test/      冒烟与负面编译用例
+packages/  同级包：meta/json/config/core/aop/async/web/app
+           每包自带接口单元与 src/；测试当前集中在根 test/
+cmake/     包构建 helper（cboot_package / cboot_component）
+test/      跨包冒烟与负面编译用例
 examples/  使用示例
 ```
 

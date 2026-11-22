@@ -1,5 +1,15 @@
 # 更新日志
 
+# 0.1.1 — 2026-11-22
+
+### 重构
+- 目录平铺：`modules/` + `src/` → `packages/<pkg>/`；每个包自带
+  `CMakeLists.txt`、模块接口单元与 `src/`。
+- 新增 `cboot_package()` / `cboot_component()` 与包配置模板；
+  基础包统一导出 `CbootTargets`，契约组件可独立 `find_package(cboot.<name>)`。
+- 公共 target 统一为 `cboot::<name>`；移除旧 `cboot::cboot_*` 兼容名。
+- 模块安装到 `share/cboot/modules/<pkg>/`；模块 provider 必须直接链接。
+
 # 0.1.0 — 2026-11-22
 
 ### 新增

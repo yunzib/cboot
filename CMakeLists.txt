@@ -48,6 +48,9 @@ endif()
 # ── GCC16 模块工程坑（kwik-ui 趟平，直接继承）───────────────
 # 同时以接口目标承载（cboot_runtime EXPORT 给外部消费方）
 add_library(cboot_runtime INTERFACE)
+# in-tree 与 find_package 消费方统一使用 cboot::runtime
+add_library(cboot::runtime ALIAS cboot_runtime)
+set_target_properties(cboot_runtime PROPERTIES EXPORT_NAME runtime)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     add_link_options(
         # 运行时静态链接：单 exe 分发（libstdc++/libgcc/libwinpthread 全内嵌）
@@ -83,36 +86,28 @@ endif()
 # 须在分层模块之前：探针结果以编译定义注入 cboot_meta（PUBLIC 下游可见）
 include(cmake/probes.cmake)
 
-# ==================== 分层模块 ====================
-include(cmake/modules/Meta.cmake)
-include(cmake/modules/Core.cmake)
-include(cmake/modules/Json.cmake)
-include(cmake/modules/Config.cmake)
-include(cmake/modules/Aop.cmake)
-include(cmake/modules/Async.cmake)
-include(cmake/modules/Web.cmake)
-include(cmake/modules/App.cmake)
+# ==================== 同级包 ====================
+# 基础包与契约组件都在 packages/ 下平级；目录分组不代表包含关系。
+# 依赖只由各包的 target_link_libraries 与 packages/CMakeLists.txt 声明。
+include(cmake/cbootPackage.cmake)
+include(cmake/cbootComponent.cmake)
+set(CBOOT_CMAKE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
+# enable_testing 必须先于 add_subdirectory(packages)：包内 add_test 才能注册
+enable_testing()
+add_subdirectory(packages)
 
 # ==================== 示例 ====================
-option(CBOOT_BUILD_EXAMPLES "Build examples" ON)
-if(CBOOT_BUILD_EXAMPLES)
-    add_subdirectory(examples)
-endif()
+# 示例通过独立工程构建（find_package(cboot) + 安装 SDK），不进入核心构建：
+#   cmake -S examples/standalone -B build-example -DCMAKE_PREFIX_PATH=<prefix>
 
 # ==================== 测试 ====================
-enable_testing()    # 须在 add_subdirectory 之前调用，ctest 才能发现用例
 add_subdirectory(test)
 
 # ==================== 安装 / 导出（find_package(cboot)）====================
-# 仅安装模块接口与静态库；消费方要求 CMake ≥ 4.3 + GCC16（-freflection 随
-# 目标 PUBLIC 选项传递）。构建树同时导出，便于本地消费/测试。
-install(TARGETS
-        cboot_runtime cboot_meta cboot_core cboot_json cboot_config
-        cboot_aop cboot_async cboot_web cboot_app
-    EXPORT CbootTargets
-    FILE_SET cxx_modules DESTINATION share/cboot/modules
-    ARCHIVE DESTINATION lib
-)
+# 基础包各自 install(TARGETS ... EXPORT CbootTargets)；这里统一导出一次。
+# 契约组件通过 cboot_component() 独立导出，见 packages/。
+install(TARGETS cboot_runtime EXPORT CbootTargets)
 
 install(EXPORT CbootTargets
     NAMESPACE cboot::
@@ -121,6 +116,14 @@ install(EXPORT CbootTargets
 export(EXPORT CbootTargets
     NAMESPACE cboot::
     FILE ${CMAKE_CURRENT_BINARY_DIR}/cbootTargets.cmake
+)
+
+# 契约组件独立构建时复用同一份 helper 与包配置模板
+install(FILES
+    cmake/cbootPackage.cmake
+    cmake/cbootComponent.cmake
+    cmake/cbootComponentConfig.cmake.in
+    DESTINATION share/cmake/cboot
 )
 
 include(CMakePackageConfigHelpers)

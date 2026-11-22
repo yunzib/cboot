@@ -1,6 +1,6 @@
 ---
 name: cboot-framework
-description: 在 cboot 仓库里开发或修改基于 C++26 静态反射的应用框架代码。当用户要新增 Bean、控制器、REST 路由、配置绑定、切面、协程 handler，排查编译期依赖注入/注解/模块错误，或改动 modules/、src/、examples/ 时使用；包含最小应用、注解与 DI 规则、路由参数协议、配置键、构建测试命令，以及 GCC 16 反射/模块的已知约束。
+description: 在 cboot 仓库里开发或修改基于 C++26 静态反射的应用框架代码。当用户要新增 Bean、控制器、REST 路由、配置绑定、切面、协程 handler，排查编译期依赖注入/注解/模块错误，或改动 packages/、cmake/、examples/ 时使用；包含最小应用、注解与 DI 规则、路由参数协议、配置键、包/CMake 约定、构建测试命令，以及 GCC 16 反射/模块的已知约束。
 ---
 
 # cboot 框架开发
@@ -13,12 +13,26 @@ cboot 把 Spring 的运行时装配搬到编译期：注解在编译期被反射
 
 - 主工具链只有 GCC 16.2（niXman MinGW），C++26 + `-freflection` + `import std`；
   Clang/MSVC 没有 P2996 实现，不要为它们加兼容分支。
-- 接口单元在 `modules/**/*.cppm`（`export module`），实现单元在 `src/**/*.cpp`；
-  `test/` 只放测试，`examples/` 只放使用示例。
+- 平铺包结构：`packages/<pkg>/`；接口单元 `packages/<pkg>/*.cppm`
+  （`export module`），实现单元 `packages/<pkg>/src/*.cpp`。
+  每个包有自己的 `CMakeLists.txt`；`packages/CMakeLists.txt` 只做同级
+  `add_subdirectory` 注册，不写源文件/安装/测试细节。
+- 两类包：
+  - **基础包**：`meta/json/config/core/aop/async/web/app`，随 `cboot` 一起
+    安装导出，不参与应用 `components` 选择；
+  - **契约组件**：`cache/redis` 等，独立包 `cboot.<name>`，设计上由应用
+    `components` 选择。装配 API（`components`/`dependencies`/闭包）尚未接入
+    `application`；在机制落地前，不要在框架代码或示例中依赖这些字段。
+- `core` 是基础层，不是其他包的容器；依赖由 `target_link_libraries` 表达。
 - 模块分层：`app → web.server → routing/http → core/json/aop → meta`。
-  新增依赖时沿这个方向，不要反向 import。
+  契约组件依赖 `core`/`config`（需要路由时依赖 `web`），**不要依赖 `app`**；
+  新增依赖时沿分层方向，不要反向 import。
+- 公共 target 名统一 `cboot::<name>`（如 `cboot::app`）；构建 target 名是
+  `cboot_<name>`。旧 `cboot::cboot_app` 等兼容名已删除，不要恢复。
 - 单入口：`import cboot.app;` 已 re-export 全部框架词汇（Bean/Inject/路由/
   Request/Response/json_response/application/...）。示例里也可以按需 import 子模块。
+  契约组件模块按需 import `cboot.core.*` / `cboot.meta.reflect` / `cboot.config`，
+  不要 import `cboot.app`（app 是装配器/组合根）。
 
 构建与测试：
 
@@ -30,6 +44,46 @@ ctest --test-dir build-release --output-on-failure
 
 改动框架后 Debug/Release 都要过 22 项 ctest；负面用例（`negative_*.cpp`）是
 预期编译失败，不能“修好”。
+
+外部消费口径：
+
+```cmake
+find_package(cboot REQUIRED)
+target_link_libraries(app PRIVATE cboot::app)   # 模块 provider 必须直接链接
+```
+
+`examples/standalone` 是独立消费工程，默认 `CBOOT_SDK_DIR` 指向
+`<repo>/build-release/install`；根构建不再编译 examples。
+
+## 包与 CMake 约定
+
+- 新增基础包：
+
+```cmake
+# packages/<pkg>/CMakeLists.txt
+cboot_package(<pkg>
+    TIER foundation
+    MODULES <pkg>.cppm
+    SOURCES src/<pkg>.cpp
+    DEPENDS meta json config)
+```
+
+  然后在 `packages/CMakeLists.txt` 按依赖顺序 `add_subdirectory(<pkg>)`；
+  不要把所有包塞进一个 CMakeLists。
+
+- `cboot_package()` 建 `cboot_<pkg>` target、别名 `cboot::<pkg>`、
+  `EXPORT_NAME <pkg>`；模块文件集 `cxx_modules`，实现源走 PRIVATE，
+  依赖只写包名并由 helper 解析成 `cboot::<dep>`。
+- 基础包统一进共享 `CbootTargets`；根 CMake 在所有基础包定义完后
+  只 `install(EXPORT CbootTargets)` 一次。
+- 契约组件用 `cboot_component(...)`：独立导出 `Cboot<Name>Targets`、
+  独立包 `cboot.<name>`，包配置先 `find_dependency(cboot)`。
+  装配代码接入 `application` 前，不要依赖 `components` / `dependencies` 字段。
+- 模块安装到 `share/cboot/modules/<pkg>/`；包配置在
+  `share/cmake/cboot`（基础包）与 `share/cmake/cboot.<name>`（组件）。
+- 模块 provider 必须被消费方**直接链接**；interface 别名不能作为模块 provider。
+- 跨包回归测试在根 `test/`；包内测试放 `packages/<pkg>/test/`，
+  通过 `TEST_SOURCES` 注册。
 
 ## 最小应用
 
@@ -265,7 +319,11 @@ struct App : application<App> {
   不要固定 sleep；IOCP 用例要与 threads 后端各跑一遍。
 - 负面用例放 `test/negative_*.cpp`，在 CMake 里注册为“预期编译失败”；
   改错误信息时同步更新它们的注释。
-- 改公开 API 后同时更新 `README.md` 与 `docs/任务清单.md` 的用法/状态。
+- 跨包回归测试在根 `test/`；包内测试用
+  `cboot_package(... TEST_SOURCES test/<pkg>_smoke.cpp)`，测试目标会自动
+  直接链接本包 `DEPENDS` 的 provider target。
+- 改公开 API 后同时更新 `README.md`、`docs/使用手册.md` 与
+  `docs/契约组件.md` 的用法/状态；`docs/任务清单.md` 是本地忽略文件，按需更新。
 
 ## GCC 16 反射/模块排错清单
 
@@ -280,8 +338,11 @@ struct App : application<App> {
   或 `std::tuple<As...>`），不要写死成非依赖特化。
 - 导出模板引用了非导出 helper：消费方链接会 undefined reference；把 helper
   放进接口单元并导出，或在模板内联实现。
-- `find_package(cboot)` 消费方：模块 provider 目标要直接链接，`-freflection`
-  要目录级生效，`cxx_std_26` 要显式声明。
+- `find_package(cboot)` 消费方：模块 provider 目标要直接链接（`cboot::app`），
+  旧 `cboot::cboot_app` 已不存在；`-freflection` 要目录级生效，
+  `cxx_std_26` 要显式声明。
+- 包内测试直接 import 依赖模块时，测试目标也要直接链接对应 provider；
+  `cboot_package_target()` 已把 `DEPENDS` 一并挂到测试目标上。
 
 ## 协作约定
 
@@ -289,4 +350,6 @@ struct App : application<App> {
   （`json::`、`config::`）；不要引入 `cboot::` 前缀。
 - 注释用中文、解释“为什么”，与周边代码密度一致。
 - 文件修改用直接编辑工具，不用脚本批量生成/改写；用户需要看到具体 diff。
+- CHANGELOG 只记录**已实现的框架/构建代码变更**；待实现项、文档修改、
+  示例修改不写入日志。条目头用 `# <version> — <date>`，与既有格式一致。
 - 不要新增角色注解、不要恢复隐式控制器注册、不要把编译期装配改成运行期扫描。

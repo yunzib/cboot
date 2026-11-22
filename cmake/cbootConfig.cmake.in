@@ -8,18 +8,21 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     add_compile_options(-freflection)
 endif()
 
-# cboot 包配置：导入全部模块化目标（cboot::cboot_meta / cboot::cboot_core /
-# cboot::cboot_json / cboot::cboot_config / cboot::cboot_aop /
-# cboot::cboot_web / cboot::cboot_app）
+# cboot 包配置：导入基础包模块化目标（cboot::meta / cboot::core /
+# cboot::json / cboot::config / cboot::aop / cboot::async /
+# cboot::web / cboot::app）。基础包在 packages/ 下同级构建，这里统一导出。
 #
 # 消费方要求（GCC16 + CMake ≥ 4.3）：
 #   set(CMAKE_CXX_STANDARD 26)
 #   set(CMAKE_CXX_MODULE_STD ON)
 #   set(CMAKE_CXX_SCAN_FOR_MODULES ON)
 #   set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "451f2fe2-a8a2-47c3-bc32-94786d8fc91b")
-#   find_package(cboot REQUIRED)                        # 须在 add_executable 之前
-#   target_link_libraries(app PRIVATE cboot::cboot_app) # 或按需取子模块
+#   find_package(cboot REQUIRED)                    # 须在 add_executable 之前
+#   target_link_libraries(app PRIVATE cboot::app)   # 模块 provider 直接链接
 
 include("${CMAKE_CURRENT_LIST_DIR}/CbootTargets.cmake")
+
+# 契约组件独立构建时复用 cboot 安装的 helper 与包配置模板
+set(cboot_CMAKE_DIR "${CMAKE_CURRENT_LIST_DIR}")
 
 check_required_components(cboot)
