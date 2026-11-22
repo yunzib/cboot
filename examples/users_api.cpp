@@ -107,10 +107,5 @@ struct ShopApp : application<ShopApp> {
 };
 
 int main(int argc, char** argv) {
-    // CLI 端口覆盖（0 = 配置 server.port → default_port）
-    const unsigned short port = argc > 1
-        ? static_cast<unsigned short>(std::atoi(argv[1])) : 0;
-
-    // 配置路径可用 .config("custom.json") 覆盖
     return ShopApp{}.run();
 }

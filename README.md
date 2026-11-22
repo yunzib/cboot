@@ -14,17 +14,20 @@
 # 1. 项目描述
 
 - 基于 C++26 静态反射（P2996）的应用框架：依赖装配、路由注册、配置绑定在**编译期**完成，运行时只做 HTTP I/O 与序列化。
-- 极简注解内核：`Bean` / `Inject` / 生命周期键 + 路由方法注解；不设 Service/Controller 等角色注解。
+- 极简注解内核：`Bean` / `Inject` / `Named` / `Value` / 生命周期键 + 路由方法注解；不设 Service/Controller 等角色注解。
+- **编译期 DI**：构造器注入、拓扑排序；同基类多实例用 `[[=Named{"..."}]]` 选择；
+  环依赖、缺失依赖、构造器歧义直接编译错。
 - **注解即注册**：`[[=Bean{}]]` 自动发现，零清单启动；控制器漏标直接编译错并指出类型名。
 - **REST**：Get/Post/Put/Delete/Patch、路径参数、JSON body、405 + Allow、413、keep-alive、pipelining。
-- **配置**：JSON 文件 + `${ENV:default}`；`[[=Config{"prefix"}]]` 通用配置 bean。
+- **配置**：JSON 文件 + `${ENV:default}`；`[[=Config{"prefix"}]]` 通用配置 bean；
+  `[[=Value{"key"}]]` 直接注入标量。
 - **JSON**：反射流式序列化，不建 value 树；≤64 字节响应零堆分配。
 - **AOP**：编译期切面链，零代理、零虚调用。
 - **传输**：threads / IOCP / epoll；万级连接、背压 503、handler 超时 504、优雅停机。
 - **协程**：`task<T>` / `sync_wait`；handler 可返回 `task<Response>`。
 - **工程**：C++20 命名模块 + `import std` + CMake 包（`find_package(cboot)`）。
 
-注解使用扁平裸名（`Bean` / `Inject` / `Get` / `Response`），无 `cboot::` 前缀；
+注解使用扁平裸名（`Bean` / `Inject` / `Named` / `Value` / `Get` / `Response`），无 `cboot::` 前缀；
 `struct` 与 `class` 均支持，`class` 的构造器、handler、生命周期方法须 public，
 继承 `application` 时须写 `public`。
 
@@ -146,7 +149,7 @@ cmake --build --preset gcc-release
 ## 4.2 测试
 
 ```bash
-ctest --preset gcc                  # 16 项：冒烟 + 负面编译用例
+ctest --preset gcc                  # 18 项：冒烟 + 负面编译用例
 ctest --test-dir build-release --output-on-failure
 ```
 
@@ -187,6 +190,7 @@ Release 构建、8 连接、16 万请求、0 失败：
 # 5. 文档
 
 - [使用手册](docs/使用手册.md)
+- [更新日志](docs/CHANGELOG.md)
 - [性能测试与 Java 对拍](docs/性能测试.md)
 - [完整示例（DI + 配置 + AOP + REST）](examples/users_api.cpp)
 

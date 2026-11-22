@@ -32,7 +32,7 @@ export struct bean_name {
 
 /**
  * @brief Bean 元数据载体（唯一类级注解）
- * 可选 name（缺省 = 类型名，用于诊断 / 未来 qualifier）。
+ * 可选 name：未命名 = 默认实例；有名字供 [[=Named{"..."}]] 选择。
  * 结构体可持续加字段演进（scope/lazy/profiles...），替代注解类型分化。
  */
 export struct Bean { bean_name name{}; };
@@ -49,6 +49,25 @@ export struct Config { bean_name prefix{}; };
 
 /** @brief 构造器选择注解：多候选构造器时显式指定注入用者（≤1 个） */
 export struct Inject {};
+
+/**
+ * @brief 注入限定符：按 bean 名字选择同类型/派生类型的实例
+ *
+ *   UserService([[=Named{"primary"}]] DataSource& ds);
+ *
+ * 未加限定符时：候选唯一，或候选中存在唯一默认实例（[[=Bean{}]] 无名）。
+ */
+export struct Named { bean_name name{}; };
+
+/**
+ * @brief 构造器参数标量配置注入
+ *
+ *   UserService([[=Value{"db.pool_size"}]] int pool);
+ *
+ * 支持 bool / 整数 / 浮点 / std::string / 枚举；参数按值或 const 引用声明。
+ * 缺键或值无法转换 → 启动期抛出带键名与 bean 名的错误。
+ */
+export struct Value { bean_name key{}; };
 
 /** @brief 初始化回调（@PostConstruct）：bean 构造后、依赖者构造前调用（≤1 个） */
 export struct PostConstruct {};
