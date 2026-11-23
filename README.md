@@ -28,7 +28,8 @@
 - **middleware**：Bean 角色 + 全局/路由级链，支持 `Request` headers、
   `request_context`、短路、CORS/OPTIONS；中间件失败不会进入 handler。
 - **认证**：`cboot.auth` 登录态（opaque token、login/logout/kickout、
-  路由 public/protected 策略、认证事件）；`cboot.jwt` 独立提供 HS256/RS256 校验。
+  路由策略、控制器级/方法级 `RequireRole`/`RequireScope`、Memory/PostgreSQL TokenStore、
+  认证事件）；`cboot.jwt` 独立提供 HS256/RS256 校验。
 - **AOP**：编译期切面链，零代理、零虚调用。
 - **事件**：`[[=EventListener{}]]` + `ctx.publish` / 注入 `event_publisher`，
   同步派发、顺序稳定、异常隔离，可接 `aspect_chain`。
@@ -164,7 +165,7 @@ cmake --build --preset gcc-release
 ## 4.2 测试
 
 ```bash
-ctest --preset gcc                  # 31 项（MySQL + OpenSSL 启用时；裁剪后相应减少）
+ctest --preset gcc                  # 32 项（MySQL + OpenSSL + PostgreSQL 启用时；裁剪后相应减少）
 ctest --test-dir build-release --output-on-failure
 ```
 
@@ -220,6 +221,7 @@ Release 构建、8 连接、16 万请求、0 失败：
 - [JWT](docs/JWT.md)
 - [ORM 组件](docs/ORM.md)
 - [更新日志](docs/CHANGELOG.md)
+- [CI](docs/CI.md)
 - [性能测试与 Java 对拍](docs/性能测试.md)
 - [完整示例（独立应用：安装 SDK + find_package + class）](examples/standalone/README.md)
 - [ORM 示例（PostgreSQL + find_package(cboot.orm.postgres)）](examples/orm/README.md)
@@ -228,7 +230,7 @@ Release 构建、8 连接、16 万请求、0 失败：
 
 ```
 packages/  同级包：meta/json/config/core/aop/async/validation/web/app
-           契约组件 schedule / orm + 驱动 / jwt / auth
+           契约组件 schedule / orm + 驱动 / jwt / auth + auth.postgres
 cmake/     包构建 helper（cboot_package / cboot_component）
 test/      按类别归类的冒烟测试；negative/ 负面用例、bench/ 压测
 examples/  使用示例

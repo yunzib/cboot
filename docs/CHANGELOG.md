@@ -11,10 +11,14 @@
 - 请求中间件：`web::Middleware` Bean 角色、全局/路由级链、
   `Request` headers、`request_context`、`OPTIONS`。
 - 认证组件：`cboot.auth` 登录态（opaque token、AuthService、
-  MemoryTokenStore、路由策略、认证事件）；`cboot.jwt` 独立提供
-  HS256/RS256 校验。
+  Memory/PostgreSQL TokenStore、路由策略、认证事件）；`cboot.jwt`
+  独立提供 HS256/RS256 校验。
 - ORM 事务 `EntityManager::transaction` + 固定连接 `session`；
   原生 SQL `query<T>` 按结果列名映射，驱动 statement 暴露列元数据。
+- 认证 RBAC：`RequireRole` / `RequireScope` 方法级/控制器级注解、
+  `auth_policy_hook` 策略合并、403 与 `authorization_failed` 事件。
+- `cboot.auth.postgres`：`PgTokenStore`（表 `cboot_auth_sessions`）；
+  auth 拆分核心 / memory / postgres TokenStore 组件。
 
 ### 重构
 - ORM 拆分为通用层 `cboot.orm` 与驱动 `cboot.orm.postgres` /

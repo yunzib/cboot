@@ -1,0 +1,58 @@
+# ============================================================================
+# cboot-framework CI
+#
+# 需要 self-hosted Windows runner，因为项目依赖 GCC 16.2 + P-2996 反射：
+#   - GCC 16.2 在 PATH
+#   - CMake 4.3+
+#   - Ninja
+#   - PostgreSQL / MySQL 客户端（按需）
+#
+# Repository variables（Settings → Variables）：
+#   CBOOT_MYSQL_ROOT       例如 C:\SQL_DB\mysql-8.2.0
+#   CBOOT_POSTGRES_ROOT    例如 C:\SQL_DB\PostgreSQL\18
+#   CBOOT_REQUIRE_DB       "true" 时要求真实 PG/MySQL 集成测试不能跳过
+#
+# Repository secrets（可选；设置后集成测试会真实执行）：
+#   CBOOT_TEST_PG_URL
+#   CBOOT_TEST_MYSQL_DATABASE
+#   CBOOT_TEST_MYSQL_USER
+#   CBOOT_TEST_MYSQL_PASSWORD
+#   CBOOT_TEST_MYSQL_HOST / PORT（可选）
+# ============================================================================
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: [self-hosted, windows, x64]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [Debug, Release]
+    env:
+      CBOOT_TEST_PG_URL: ${{ secrets.CBOOT_TEST_PG_URL }}
+      CBOOT_TEST_MYSQL_DATABASE: ${{ secrets.CBOOT_TEST_MYSQL_DATABASE }}
+      CBOOT_TEST_MYSQL_USER: ${{ secrets.CBOOT_TEST_MYSQL_USER }}
+      CBOOT_TEST_MYSQL_PASSWORD: ${{ secrets.CBOOT_TEST_MYSQL_PASSWORD }}
+      CBOOT_TEST_MYSQL_HOST: ${{ secrets.CBOOT_TEST_MYSQL_HOST }}
+      CBOOT_TEST_MYSQL_PORT: ${{ secrets.CBOOT_TEST_MYSQL_PORT }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and test
+        shell: pwsh
+        run: |
+          $ciArgs = @(
+            "-Config", "${{ matrix.config }}",
+            "-MysqlRoot", "${{ vars.CBOOT_MYSQL_ROOT }}",
+            "-PostgresRoot", "${{ vars.CBOOT_POSTGRES_ROOT }}"
+          )
+          if ("${{ vars.CBOOT_REQUIRE_DB }}" -eq "true") {
+            $ciArgs += "-RequireDb"
+          }
+          ./scripts/ci.ps1 @ciArgs

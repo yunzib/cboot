@@ -125,7 +125,17 @@ Response unauthorized() {
     return r;
 }
 
+Response forbidden() {
+    json::object body;
+    body.emplace_back("error", json::value("forbidden"));
+    Response r = json_response(json::value(std::move(body)));
+    r.status = 403;
+    return r;
+}
+
 } // namespace
+
+std::string new_token() { return random_token(); }
 
 // ==================== MemoryTokenStore ====================
 
@@ -154,7 +164,7 @@ std::string MemoryTokenStore::create(session s) {
     {
         std::lock_guard lock(impl_->mu);
         do {
-            token = random_token();
+            token = new_token();
         } while (impl_->tokens.contains(token));
         impl_->tokens.emplace(token, std::move(s));
     }
@@ -245,8 +255,8 @@ void AuthService::kickout(std::string_view subject) {
 // ==================== AuthGuard ====================
 
 AuthGuard::AuthGuard(AuthService& service, AuthProps& props,
-                     event_publisher& bus)
-    : service_(service), props_(props), bus_(bus) {
+                     AuthPolicy& policy, event_publisher& bus)
+    : service_(service), props_(props), policy_(policy), bus_(bus) {
     if (props_.default_policy != "protected"
         && props_.default_policy != "public")
         throw std::invalid_argument(
@@ -292,6 +302,22 @@ bool AuthGuard::requires_auth(const web::route_info& route) const {
     return props_.default_policy == "protected";
 }
 
+bool AuthGuard::allows(const web::route_info& route, const session& s) const {
+    const std::string key = std::string(route.bean) + "." + std::string(route.handler);
+    const route_policy* p = policy_.find(key);
+    if (!p) return true;
+
+    for (const auto& role : p->roles) {
+        if (std::find(s.roles.begin(), s.roles.end(), role) == s.roles.end())
+            return false;
+    }
+    for (const auto& scope : p->scopes) {
+        if (std::find(s.scopes.begin(), s.scopes.end(), scope) == s.scopes.end())
+            return false;
+    }
+    return true;
+}
+
 Response AuthGuard::handle(web::request_context& ctx, const web::next_fn& next) {
     // 404/OPTIONS 不触发认证；OPTIONS 由 CORS/全局中间件处理。
     if (!ctx.route || ctx.request.method == "OPTIONS") return next();
@@ -309,6 +335,16 @@ Response AuthGuard::handle(web::request_context& ctx, const web::next_fn& next) 
             .reason = "missing or invalid token",
         });
         return unauthorized();
+    }
+
+    if (!allows(*ctx.route, *s)) {
+        bus_.publish(authorization_failed{
+            .subject = s->subject,
+            .method = std::string(ctx.request.method),
+            .path = std::string(ctx.request.path),
+            .reason = "missing required role or scope",
+        });
+        return forbidden();
     }
 
     bus_.publish(authentication_succeeded{

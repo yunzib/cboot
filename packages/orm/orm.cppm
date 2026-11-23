@@ -52,6 +52,11 @@ std::vector<T> all_impl(connection& conn, const dialect& d) {
 }
 
 template <class T>
+consteval bool has_generated_id() {
+    return entity_meta_v<T>.id_generated;
+}
+
+template <class T>
 void insert_impl(connection& conn, const dialect& d, T& entity) {
     const auto& meta = entity_meta_v<T>;
     auto stmt = conn.prepare(insert_sql<T>(d));
@@ -59,22 +64,21 @@ void insert_impl(connection& conn, const dialect& d, T& entity) {
     for (std::size_t i = 0; i < values.size(); ++i)
         stmt->bind(i, values[i]);
 
-    if (!meta.id_generated) {
+    if constexpr (!has_generated_id<T>()) {
         (void)stmt->next();
-        return;
-    }
+    } else {
+        auto& id = entity.[:nth_member<T, meta.id_index>():];
+        if (d.supports_returning()) {
+            if (!stmt->next())
+                throw error("cboot.orm: INSERT RETURNING produced no row");
+            read_scalar(*stmt, 0, id);
+            return;
+        }
 
-    auto& id = entity.[:nth_member<T, meta.id_index>():];
-    if (d.supports_returning()) {
-        if (!stmt->next())
-            throw error("cboot.orm: INSERT RETURNING produced no row");
-        read_scalar(*stmt, 0, id);
-        return;
+        (void)stmt->next();
+        const std::int64_t generated = conn.last_insert_id();
+        id = static_cast<std::remove_cvref_t<decltype(id)>>(generated);
     }
-
-    (void)stmt->next();
-    const std::int64_t generated = conn.last_insert_id();
-    id = static_cast<std::remove_cvref_t<decltype(id)>>(generated);
 }
 
 template <class T>

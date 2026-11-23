@@ -27,5 +27,6 @@ add_subdirectory(orm.postgres)
 add_subdirectory(orm.mysql)
 add_subdirectory(jwt)
 add_subdirectory(auth)
+add_subdirectory(auth.postgres)
 
 # add_subdirectory(cache)

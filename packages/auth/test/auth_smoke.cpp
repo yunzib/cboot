@@ -16,7 +16,7 @@ import cboot.web.middleware;
 import std;
 
 struct AuthApp : application<AuthApp> {
-    using components = type_list<auth_component>;
+    using components = type_list<auth_memory_component>;
 };
 
 template <class L, class T>
@@ -37,6 +37,8 @@ struct Api {
     }
 
     [[=Get{"/api/me"}]]
+    [[=auth::RequireRole{"admin"}]]
+    [[=auth::RequireScope{"write"}]]
     Response me(const web::request_context& ctx) {
         const auto* s = ctx.find<auth::session>();
         return json_response(json::value(s ? s->subject : "none"));
@@ -50,6 +52,14 @@ struct Api {
     [[=Get{"/health"}]]
     Response health() {
         return json_response(json::value("up"));
+    }
+};
+
+struct [[=Bean{}]] [[=auth::RequireRole{"admin"}]] RoleApi {
+    [[=Get{"/admin"}]]
+    [[=auth::RequireScope{"write"}]]
+    Response admin() {
+        return json_response(json::value("admin"));
     }
 };
 
@@ -107,7 +117,10 @@ int main(int argc, char**) {
     event_publisher bus;
     bus.bind(&counts, &map);
 
-    auth::AuthGuard guard(service, props, bus);
+    auth::AuthPolicy policy;
+    policy.set("Api.me", auth::route_policy{
+        .roles = {"admin"}, .scopes = {"write"}});
+    auth::AuthGuard guard(service, props, policy, bus);
     Api api;
     router r;
     r.mount(api);
@@ -127,13 +140,21 @@ int main(int argc, char**) {
     if (counts.failed != 1 || counts.ok != 0) return 9;
 
     // 登录成功 → principal + success 事件
-    const std::string fresh = service.login(auth::session{.subject = "user-7"});
+    const std::string fresh = service.login(auth::session{
+        .subject = "user-7", .roles = {"admin"}, .scopes = {"write"}});
     const std::string headers = "Authorization: Bearer " + fresh + "\r\n";
     counts = {};
     auto ok = r.dispatch("GET", "/api/me", "", headers);
     if (ok.status != 200 || json::parse(ok.body).as_string() != "user-7")
         return 10;
     if (counts.ok != 1 || counts.failed != 0) return 11;
+
+    // 已登录但缺少角色/scope → 403
+    const std::string limited = service.login(auth::session{.subject = "user-8"});
+    const std::string limited_headers =
+        "Authorization: Bearer " + limited + "\r\n";
+    if (r.dispatch("GET", "/api/me", "", limited_headers).status != 403)
+        return 15;
 
     // logout 后 token 失效
     service.logout(fresh);
@@ -151,7 +172,18 @@ int main(int argc, char**) {
         AuthCtx ctx(&cfg);
         auto& app_service = ctx.get<auth::AuthService>();
         const std::string t = app_service.login(auth::session{.subject = "ctx-user"});
-        if (!app_service.find(t)) return 15;
+        if (!app_service.find(t)) return 16;
+    }
+
+    // 启动期 hook 扫描 Bean 方法上的 RequireRole/RequireScope
+    {
+        using HookCtx = context<auth::AuthPolicy, RoleApi>;
+        HookCtx hook_ctx;
+        auth::auth_policy_hook::instance<HookCtx> hook(hook_ctx);
+        const auto* p = hook_ctx.get<auth::AuthPolicy>().find("RoleApi.admin");
+        if (!p || p->roles.size() != 1 || p->roles[0] != "admin"
+            || p->scopes.size() != 1 || p->scopes[0] != "write")
+            return 17;
     }
 
     // argc>200 才运行：实例化 application::run / middleware 注册路径。
