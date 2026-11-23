@@ -32,6 +32,8 @@
 - **错误处理**：全局 `ErrorHandler` middleware + `ErrorMapper`，
   统一 404/405、校验 400、认证 401/403、handler 500；
   `request_context::get<T>()` 取上下文属性。
+- **日志**：`cboot.log` 门面 + 可选 `log_component`，console/file/rolling、
+  text/JSON、级别覆盖、MDC；默认 console 始终可用。
 - **认证**：`cboot.auth` 登录态（opaque token、login/logout/kickout、
   路由策略、控制器级/方法级 `RequireRole`/`RequireScope`、Memory/PostgreSQL TokenStore、
   Header/Cookie 传输、滑动续期、认证事件）；`cboot.jwt` 独立提供 HS256/RS256 校验。
@@ -240,6 +242,7 @@ Release 构建、8 连接、16 万请求、0 失败：
 - [DTO 校验](docs/校验.md)
 - [中间件](docs/中间件.md)
 - [全局错误处理](docs/错误处理.md)
+- [日志](docs/日志.md)
 - [CORS](docs/CORS.md)
 - [自定义认证](docs/自定义认证.md)
 - [认证](docs/认证.md)
@@ -255,7 +258,7 @@ Release 构建、8 连接、16 万请求、0 失败：
 # 6. 目录
 
 ```
-packages/  同级包：meta/json/config/core/aop/async/validation/web/app
+packages/  同级包：meta/json/config/core/log/aop/async/validation/web/app
            契约组件 schedule / orm + 驱动 / jwt / auth + auth.postgres
 cmake/     包构建 helper（cboot_package / cboot_component）
 test/      按类别归类的冒烟测试；negative/ 负面用例、bench/ 压测

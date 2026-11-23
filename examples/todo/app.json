@@ -25,5 +25,10 @@
     "protected_paths": [
       "/api/**"
     ]
+  },
+  "log": {
+    "level": "info",
+    "format": "text",
+    "output": "console"
   }
 }

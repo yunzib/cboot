@@ -3,6 +3,7 @@
 一个可直接运行的最小完整项目：
 
 - 后端：cboot 编译期路由 + PostgreSQL ORM + 登录认证（`cboot.auth`）
+- 日志：`cboot.log` + `log_component`，console 输出
 - 前端：单文件 `web/index.html`，原生 `fetch`，无构建步骤
 - 分层：`model → repository → service → api → app`，`main.cpp` 只启动
 - 数据库：建表 + 示例数据备份在 `db/`，其他人可直接恢复
@@ -22,7 +23,7 @@ examples/todo/
 │   ├── api/page_api.cppm    返回 web/index.html
 │   └── app.cppm             App 与组件选择
 ├── web/index.html           前端页面（登录 + 待办）
-├── app.json                 端口、数据库与 auth 配置
+├── app.json                 端口、数据库、auth 与 log 配置
 └── db/
     ├── schema.sql           仅建表（空库初始化）
     └── backup.sql           建表 + 示例数据
@@ -135,9 +136,16 @@ http://127.0.0.1:8090
 3. `Setup` 的 `PostConstruct` 创建任务表、用户表、唯一索引，
    并在用户表为空时创建默认账号 `admin / admin123`
 4. 挂载认证路由、`/api/tasks` 与 `/` 路由
+5. `log_component` 按 `log.*` 安装日志输出
+
+启动日志：
+
+```text
+2026-11-23 10:12:24.579 INFO  [1] cboot.app - starting on port 8090 (workers=0, beans=19)
+```
 
 数据库不可达时启动失败，属于预期行为。默认账号仅用于本地演示，
-生产环境必须删除或改密。
+生产环境必须删除或改密。日志配置详见 [日志](../../docs/日志.md)。
 
 ## 6. 登录与接口
 

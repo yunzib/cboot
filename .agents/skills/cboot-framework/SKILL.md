@@ -18,12 +18,13 @@ cboot-framework 把 Spring 的运行时装配搬到编译期：注解在编译�
   每个包有自己的 `CMakeLists.txt`；`packages/CMakeLists.txt` 只做同级
   `add_subdirectory` 注册，不写源文件/安装/测试细节。
 - 两类包：
-  - **基础包**：`meta/json/config/core/aop/async/validation/web/app`，随 `cboot`
+  - **基础包**：`meta/json/config/core/log/aop/async/validation/web/app`，随 `cboot`
     一起安装导出，不参与应用 `components` 选择；
   - **契约组件**：`schedule`、`orm`、`orm.postgres`、`orm.mysql`、
     `jwt`、`auth`、`auth.postgres` 等，独立包 `cboot.<name>`；驱动组件可用 `PACKAGE_NAME`
     解耦 target 名与包名（`orm_postgres` / `cboot.orm.postgres`）。
     `web` 包内另有可选 `cors_component`（`import cboot.web.cors`）。
+    `log` 包内另有可选 `log_component`（`import cboot.log.component`）。
     `auth` 与 `jwt` 相互独立。
     描述符声明 `beans` / `dependencies` / `hooks`，由应用 `components` 选择。
     首个真实组件是 `cboot.schedule`（`Scheduled` 注解 + 调度 hook）。
@@ -412,8 +413,24 @@ struct App : application<App> {
   依赖 `auth_component` + `postgres_component`。
 - CMake：`cboot::auth` / `cboot::auth_postgres` / `cboot::jwt`；
   auth 不依赖 OpenSSL，jwt 依赖 OpenSSL。
-- 测试：`web_middleware_smoke`、`cors_smoke`、`error_smoke`、`jwt_smoke`、
-  `auth_smoke`、`auth_postgres_smoke`（需 `CBOOT_TEST_PG_URL`）。
+- 测试：`web_middleware_smoke`、`cors_smoke`、`error_smoke`、`log_smoke`、
+  `jwt_smoke`、`auth_smoke`、`auth_postgres_smoke`（需 `CBOOT_TEST_PG_URL`）。
+
+## 日志（cboot.log）
+
+- 模块 `cboot.log`，命名空间 `logging`（全局 `log` 与 C `math.h` 的
+  `double log(double)` 冲突，不能叫 `namespace log`）。
+- 基础包默认 console + info 始终可用；`log_component` 读取 `log.*`：
+  `level` / `format` / `pattern` / `output` / `file` / `max_size_mb` /
+  `max_files` / `file_level` / `logger_levels`。
+- API：`logging::get("name")` → `logger`；`trace/debug/info/warn/error`
+  用 `std::format`；启动期 `set_level` / `set_layout` / `add_sink` /
+  `clear_sinks` / `set_logger_level` / `flush`。
+- 内置 `console_sink` / `file_sink` / `rolling_file_sink`；text pattern
+  支持 `%d %level %logger %msg %thread %n %X{key}`；JSON Lines。
+- MDC：`logging::context::scope ctx("request_id", id)`。
+- `web` 的 `ErrorHandler` 5xx 记 error、4xx 记 debug；app 启动/停止记 info。
+- 测试：`log_smoke`（级别过滤、前缀覆盖、JSON/MDC、file/rolling、LogSetup）。
 
 ## 健康检查
 
@@ -444,7 +461,7 @@ struct App : application<App> {
   直接链接本包 `DEPENDS` 的 provider target。
 - 改公开 API 后同时更新 `README.md`、`docs/使用手册.md`、
   `docs/契约组件.md`、`docs/定时任务.md`、`docs/ORM.md`、
-  `docs/认证.md`、`docs/CORS.md` 与 `docs/错误处理.md`；
+  `docs/认证.md`、`docs/CORS.md`、`docs/错误处理.md` 与 `docs/日志.md`；
   `docs/任务清单.md` 是本地忽略文件，按需更新。
 
 ## GCC 16 反射/模块排错清单

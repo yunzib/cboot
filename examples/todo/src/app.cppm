@@ -10,6 +10,7 @@ export module todo.app;
 import std;
 import cboot.app;               // application / type_list
 import cboot.auth.postgres;     // auth_postgres_component（含 postgres_component）
+import cboot.log.component;     // log_component
 import cboot.meta.reflect;      // type_list
 export import todo.api.auth;
 export import todo.api.errors;
@@ -24,5 +25,5 @@ export class App : public application<App> {
 public:
     static constexpr std::string_view config_path = "app.json";
     static constexpr unsigned short default_port = 8090;
-    using components = type_list<auth_postgres_component>;
+    using components = type_list<log_component, auth_postgres_component>;
 };

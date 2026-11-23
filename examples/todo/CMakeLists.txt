@@ -74,6 +74,7 @@ target_link_libraries(cboot_example_todo PRIVATE
     cboot::auth
     cboot::auth_postgres
     cboot::core
+    cboot::log
     cboot::meta
     cboot::validation
     cboot::web

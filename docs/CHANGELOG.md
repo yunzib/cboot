@@ -24,6 +24,9 @@
 - 全局错误层 `cboot.web.error`：`error_info` / `ErrorHandler` /
   `ErrorMapper`，统一 404/405、校验 400、认证 401/403、handler 500；
   `request_context::get<T>()`；AuthGuard 改为抛结构化 `web::error`。
+- 日志 `cboot.log`：`logging::logger` / sink / text/JSON / MDC；
+  可选 `log_component` 支持 console/file/rolling、级别覆盖；
+  app 启动日志与 ErrorHandler 5xx 日志接入。
 - 配置源：CLI `--key=value` / `--config`、`CB_` 环境变量，优先级
   CLI > env > JSON；配置绑定错误聚合全部非法键。
 - `cboot.auth.postgres`：`PgTokenStore`（表 `cboot_auth_sessions`）；

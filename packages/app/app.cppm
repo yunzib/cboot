@@ -10,6 +10,8 @@ export import cboot.config;             // config::properties / bind
 export import cboot.core.annotations;   // Bean / Inject / Config / 生命周期
 export import cboot.core.context;       // context / context_for
 export import cboot.json;               // json::value / parse / from
+export import cboot.log;                // logging::get / logger / sinks
+export import cboot.log.component;      // log_component / LogProps
 export import cboot.meta.reflect;       // for_each_member / type_list / type_of_t
 export import cboot.validation;         // NotBlank / Range / validate
 export import cboot.web.http;           // Get/Post/Put/Delete/Patch / Request / Response
@@ -255,6 +257,10 @@ struct boot_runner<type_list<Ts...>, type_list<Hs...>> {
         context<Ts...> ctx(cfg);                  // 先构造：先于 server 启动
         // 组件 hooks 在全部 bean 构造完后安装；先于 ctx 析构停止。
         hook_scope<context<Ts...>, Hs...> hooks(ctx);
+
+        auto app_log = logging::get("cboot.app");
+        app_log.info("starting on port {} (workers={}, beans={})",
+                     port, workers, sizeof...(Ts));
         server_config sc;
         sc.port = port;
         sc.workers = workers;
@@ -291,6 +297,7 @@ struct boot_runner<type_list<Ts...>, type_list<Hs...>> {
             }(), ...);
         }(std::make_index_sequence<sizeof...(Ts)>{});
         int rc = s.run();
+        app_log.info("stopped (code={})", rc);
         remove_stop_handler();
         return rc;                                // ctx 析构 → PreDestroy（逆序）
     }

@@ -10,7 +10,7 @@
 | 基础包 | `cboot_package(...)` | 否；随 `cboot` 一起安装导出 |
 | 契约组件 | `cboot_component(...)` | 是；独立包 `cboot.<name>` |
 
-基础包：`meta`、`json`、`config`、`core`、`aop`、`async`、`validation`、
+基础包：`meta`、`json`、`config`、`core`、`log`、`aop`、`async`、`validation`、
 `web`、`app`。
 契约组件：`schedule`（固定延迟 / cron，贡献 hook，不贡献 bean）、
 `orm`（通用 EntityManager / DSL）、`orm.postgres`（PostgreSQL 驱动）、
@@ -24,7 +24,9 @@ middleware 不新增描述符字段：中间件是 `[[=Bean{}]]` +
 `[[=web::Middleware{...}]]` 的角色；应用启动时从 `app_beans_t` 收集。
 `web` 包另导出可选 `cors_component`（来源白名单 / 预检 / 凭证），
 不选则无 CORS 行为；`web` 的 `cboot.web.error` 提供全局 `ErrorHandler` +
-`ErrorMapper`，由 `app` 在启动时自动安装。
+`ErrorMapper`，由 `app` 在启动时自动安装。`log` 包的 `log_component`
+负责读取 `log.*` 并装配 console/file/rolling sink；不选时默认 console
+仍可用。
 
 驱动组件用 `cboot_component` 的 `PACKAGE_NAME` 把 target 名与包名解耦：
 

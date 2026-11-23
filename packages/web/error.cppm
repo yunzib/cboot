@@ -13,6 +13,7 @@ export module cboot.web.error;
 
 import std;
 import cboot.json;
+import cboot.log;
 import cboot.validation;      // invalid / field_error
 import cboot.web.http;        // Response / json
 import cboot.web.middleware;  // request_context / next_fn
@@ -210,14 +211,14 @@ public:
             if (const auto* marked = ctx.find<error_info>()) {
                 auto info = *marked;
                 detail::fill_request(info, ctx);
-                return registry_.respond(info, ctx);
+                return respond(info, ctx);
             }
             return response;
         } catch (const web::error& e) {
             auto info = e.info();
             detail::fill_request(info, ctx);
             if (!info.cause) info.cause = std::current_exception();
-            return registry_.respond(info, ctx);
+            return respond(info, ctx);
         } catch (const validation::invalid& e) {
             error_info info{
                 .status = 400,
@@ -228,7 +229,7 @@ public:
                 info.fields.push_back({field.field, field.message});
             detail::fill_request(info, ctx);
             info.cause = std::current_exception();
-            return registry_.respond(info, ctx);
+            return respond(info, ctx);
         } catch (const std::exception& e) {
             error_info info{
                 .status = 500,
@@ -237,7 +238,7 @@ public:
             };
             detail::fill_request(info, ctx);
             info.cause = std::current_exception();
-            return registry_.respond(info, ctx);
+            return respond(info, ctx);
         } catch (...) {
             error_info info{
                 .status = 500,
@@ -246,11 +247,27 @@ public:
             };
             detail::fill_request(info, ctx);
             info.cause = std::current_exception();
-            return registry_.respond(info, ctx);
+            return respond(info, ctx);
         }
     }
 
 private:
+    Response respond(const error_info& info,
+                     const web::request_context& ctx) const {
+        Response response = registry_.respond(info, ctx);
+
+        // 5xx 记录 error；4xx 只在 debug 级别记录，避免正常登录失败刷日志。
+        auto web_log = logging::get("cboot.web");
+        if (info.status >= 500) {
+            web_log.error("{} {} -> {} {}", info.method, info.path,
+                          info.status, info.code);
+        } else if (info.status >= 400) {
+            web_log.debug("{} {} -> {} {}", info.method, info.path,
+                          info.status, info.code);
+        }
+        return response;
+    }
+
     const error_registry& registry_;
 };
 

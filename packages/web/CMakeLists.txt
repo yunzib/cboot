@@ -10,7 +10,7 @@ cboot_package(web
     TIER runtime
     MODULES http.cppm parser.cppm session.cppm middleware.cppm error.cppm cors.cppm routing.cppm server.cppm
     SOURCES src/routing.cpp src/server.cpp src/iocp.cpp src/epoll.cpp
-    DEPENDS aop async core json meta validation
+    DEPENDS aop async core json log meta validation
 )
 
 if(WIN32)
