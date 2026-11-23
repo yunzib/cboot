@@ -25,7 +25,12 @@ import std;
 export struct bean_name {
     char data[64]{};
 
-    constexpr std::string_view view() const { return std::string_view(data); }
+    constexpr std::string_view view() const {
+        // 有界扫描：char[64] 可能被完整填充，不依赖尾 NUL。
+        std::size_t n = 0;
+        while (n < sizeof(data) && data[n] != '\0') ++n;
+        return {data, n};
+    }
     constexpr bool empty() const { return data[0] == '\0'; }
     constexpr bool operator==(const bean_name&) const = default;
 };

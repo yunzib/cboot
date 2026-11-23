@@ -21,5 +21,8 @@ add_subdirectory(app)
 # 独立包 + 独立导出 + components 选择；新增组件时先建目录，再在这里注册。
 # 组件 target 始终构建；是否装配由应用 components 决定。
 add_subdirectory(schedule)
+add_subdirectory(orm)
+add_subdirectory(orm.postgres)
+add_subdirectory(orm.mysql)
 
 # add_subdirectory(cache)

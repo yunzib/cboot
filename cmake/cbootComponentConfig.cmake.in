@@ -6,6 +6,9 @@
 #   3. 最后导入本组件的导出 target
 include(CMakeFindDependencyMacro)
 
+# 组件依赖的查找模块（如 FindMySQL.cmake）随 cboot SDK 安装。
+list(APPEND CMAKE_MODULE_PATH "${PACKAGE_PREFIX_DIR}/share/cmake/cboot")
+
 if(NOT TARGET cboot::core)
     find_dependency(cboot)
 endif()

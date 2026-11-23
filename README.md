@@ -29,6 +29,8 @@
 - **契约组件**：`components` / `dependencies` 编译期装配，组件可贡献 bean 与 hooks；
   首个组件 `cboot.schedule`。
 - **定时**：`[[=Scheduled{...}]]` 固定延迟 / 5/6 段 cron，单调度线程、异常隔离、停机取消。
+- **ORM（可选组件）**：通用类型安全 ORM + PostgreSQL / MySQL 驱动，
+  实体元数据、CRUD、查询 DSL。
 - **运维**：内建 `GET /health`（200/503 + JSON）、`GET /beans`（仅 dev）。
 - **传输**：threads / IOCP / epoll；万级连接、背压 503、handler 超时 504、优雅停机。
 - **协程**：`task<T>` / `sync_wait`；handler 可返回 `task<Response>`。
@@ -156,7 +158,7 @@ cmake --build --preset gcc-release
 ## 4.2 测试
 
 ```bash
-ctest --preset gcc                  # 22 项：冒烟 + 负面编译用例
+ctest --preset gcc                  # 27 项（含 MySQL 驱动；未找到客户端时 25）
 ctest --test-dir build-release --output-on-failure
 ```
 
@@ -205,15 +207,17 @@ Release 构建、8 连接、16 万请求、0 失败：
 - [事件总线](docs/EventBus.md)
 - [契约组件](docs/契约组件.md)
 - [定时任务](docs/定时任务.md)
+- [ORM 组件](docs/ORM.md)
 - [更新日志](docs/CHANGELOG.md)
 - [性能测试与 Java 对拍](docs/性能测试.md)
 - [完整示例（独立应用：安装 SDK + find_package + class）](examples/standalone/README.md)
+- [ORM 示例（PostgreSQL + find_package(cboot.orm.postgres)）](examples/orm/README.md)
 
 # 6. 目录
 
 ```
 packages/  同级包：meta/json/config/core/aop/async/web/app
-           另有契约组件 schedule；每包自带接口单元与 src/
+           契约组件 schedule；ORM 通用层 orm + 驱动 orm.postgres / orm.mysql
 cmake/     包构建 helper（cboot_package / cboot_component）
 test/      按类别归类的冒烟测试；negative/ 负面用例、bench/ 压测
 examples/  使用示例

@@ -20,7 +20,9 @@ cboot 把 Spring 的运行时装配搬到编译期：注解在编译期被反射
 - 两类包：
   - **基础包**：`meta/json/config/core/aop/async/web/app`，随 `cboot` 一起
     安装导出，不参与应用 `components` 选择；
-  - **契约组件**：`schedule/cache/redis` 等，独立包 `cboot.<name>`；
+  - **契约组件**：`schedule`、`orm`、`orm.postgres`、`orm.mysql` 等，
+    独立包 `cboot.<name>`；驱动组件可用 `PACKAGE_NAME` 解耦 target 名与包名
+    （`orm_postgres` / `cboot.orm.postgres`）。
     描述符声明 `beans` / `dependencies` / `hooks`，由应用 `components` 选择。
     首个真实组件是 `cboot.schedule`（`Scheduled` 注解 + 调度 hook）。
 - `core` 是基础层，不是其他包的容器；依赖由 `target_link_libraries` 表达。
@@ -44,8 +46,8 @@ cmake --preset gcc-release && cmake --build --preset gcc-release
 ctest --test-dir build-release --output-on-failure
 ```
 
-改动框架后 Debug/Release 都要过 24 项 ctest；负面用例（`negative_*.cpp`）是
-预期编译失败，不能“修好”。
+改动框架后 Debug/Release 都要过 27 项 ctest（未找到 MySQL 客户端时 25 项）；
+负面用例（`negative_*.cpp`）是预期编译失败，不能“修好”。
 
 外部消费口径：
 
@@ -311,6 +313,36 @@ struct App : application<App> {
   Profile 未激活不注册。
 - 任务应短小；当前无任务线程池。
 
+## ORM（契约组件 cboot.orm + 驱动）
+
+- 分层：`cboot.orm` 只含 annotations/driver/meta/dsl/EntityManager；
+  `cboot.orm.postgres` 与 `cboot.orm.mysql` 各自提供配置、dialect、
+  DataSource 和驱动实现。通用层不得 include libpq/mysql.h。
+- 应用选择驱动组件：
+  `import cboot.orm.postgres;`（或 `cboot.orm.mysql`），
+  `using components = type_list<postgres_component>;`；
+  `postgres_component` 的 `dependencies = type_list<orm_component>`。
+- 实体注解：`[[=orm::Table{.name, .schema}]]`、`[[=orm::Column{"..."}]]`、
+  `[[=orm::Id{.generated=true}]]`；实体是 aggregate，恰好一个 Id。
+- `EntityManager`：`find/all/insert/update/remove/create_schema/drop_schema`；
+  自增主键按 dialect 选择 `RETURNING` 或 `last_insert_id`。
+- DSL：`db.select<T>().where(...).order_by(...).limit()/offset().fetch()`；
+  `col<^^T::field>()`，支持比较、`is_null`、`in`、`like/ilike`、`&&/||/!`。
+  条件保存 AST，执行时才按 `dialect` 渲染。
+- 配置前缀 `db`：PostgreSQL 用 `PgProps`（url/user/password/sslmode/池），
+  MySQL 用 `MysqlProps`（host/port/database/user/password/charset/池）。
+  password 可留空或写 `${PGPASSWORD}` / `${MYSQL_PWD}`。
+- 第三方头只进实现单元：PG 用 `PQexecParams`；MySQL 用
+  `mysql_real_escape_string` 的文本协议（不是服务端预处理语句）。
+- CMake：`cboot::orm_postgres` / `cboot::orm_mysql`；包名
+  `cboot.orm.postgres` / `cboot.orm.mysql`；MySQL 用 SDK 的
+  `FindMySQL.cmake`，可传 `MYSQL_ROOT`/`MySQL_ROOT`。
+- Windows 运行时需要 `libpq.dll` / `libmysql.dll` 在 PATH 或 exe 同目录；
+  MySQL 测试 target 会复制 DLL。
+- 集成测试：`CBOOT_TEST_PG_URL`、`CBOOT_TEST_MYSQL_DATABASE`（及可选
+  `CBOOT_TEST_MYSQL_HOST/PORT/USER/PASSWORD`）；未设置时只跑单元测试。
+- 事务/session、原生 SQL 查询映射、repository 模板尚未接入。
+
 ## 健康检查
 
 - 应用自动挂载 `GET /health`：JSON `status/beans/startup_ms`，DOWN 时 503 + reason。
@@ -339,8 +371,8 @@ struct App : application<App> {
   `cboot_package(... TEST_SOURCES test/<pkg>_smoke.cpp)`，测试目标会自动
   直接链接本包 `DEPENDS` 的 provider target。
 - 改公开 API 后同时更新 `README.md`、`docs/使用手册.md`、
-  `docs/契约组件.md` 与 `docs/定时任务.md`；`docs/任务清单.md`
-  是本地忽略文件，按需更新。
+  `docs/契约组件.md`、`docs/定时任务.md` 与 `docs/ORM.md`；
+  `docs/任务清单.md` 是本地忽略文件，按需更新。
 
 ## GCC 16 反射/模块排错清单
 
@@ -360,6 +392,29 @@ struct App : application<App> {
   `cxx_std_26` 要显式声明。
 - 包内测试直接 import 依赖模块时，测试目标也要直接链接对应 provider；
   `cboot_package_target()` 已把 `DEPENDS` 一并挂到测试目标上。
+
+## 代码注释（必须遵守）
+
+- **所有新增/修改的代码都必须有中文注释**：`.cppm` / `.cpp` / CMake / 测试文件都不例外。
+- **每个代码文件顶部必须有文件级文档块**，使用固定风格：
+
+```cpp
+/**
+ * @file orm.dsl.cppm
+ * @brief ORM 类型安全 DSL
+ *
+ * 提供单表 select/update/delete 的类型安全构造；
+ * 不提供 join/聚合/CTE，复杂 SQL 走原生逃生口。
+ */
+```
+
+- 公开类型、函数、builder、CMake 函数都用 `@brief` 文档块，说明能力、边界、
+  参数语义和生命周期；不要只写一行 `//` 注释。
+- 注释解释“为什么、约束、边界、生命周期”，不要复述代码字面。
+- 模板、反射、splice、模块边界、导出规则必须写清限制和原因。
+- CMake target / 导出 / 安装规则要有注释；组件文件头说明贡献什么。
+- 测试文件头写覆盖点；负面测试注明预期诊断。
+- 不写无意义注释；但“没有文件级/接口级注释”视为不合规。
 
 ## 协作约定
 

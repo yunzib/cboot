@@ -11,8 +11,24 @@
 | 契约组件 | `cboot_component(...)` | 是；独立包 `cboot.<name>` |
 
 基础包：`meta`、`json`、`config`、`core`、`aop`、`async`、`web`、`app`。
-契约组件：`schedule`（固定延迟 / cron，贡献 hook，不贡献 bean）。
+契约组件：`schedule`（固定延迟 / cron，贡献 hook，不贡献 bean）、
+`orm`（通用 EntityManager / DSL）、`orm.postgres`（PostgreSQL 驱动）、
+`orm.mysql`（MySQL 驱动）。驱动组件通过 `dependencies` 带入 `orm`。
 `core` 特殊在职责（注解/DI 容器）和依赖位置，不是其他包的父目录。
+
+驱动组件用 `cboot_component` 的 `PACKAGE_NAME` 把 target 名与包名解耦：
+
+```cmake
+cboot_component(orm_postgres
+    PACKAGE_NAME cboot.orm.postgres
+    MODULES orm.postgres.cppm
+    SOURCES src/postgres.cpp
+    DEPENDS meta core config orm
+    PACKAGE_DEPENDS cboot.orm PostgreSQL
+)
+```
+
+target 是 `cboot::orm_postgres`，消费方 `find_package(cboot.orm.postgres)`。
 
 ## 包内布局
 

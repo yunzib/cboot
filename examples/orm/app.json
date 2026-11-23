@@ -1,0 +1,19 @@
+{
+  "cboot": {
+    "profiles": {
+      "active": "dev"
+    }
+  },
+  "server": {
+    "port": 8080
+  },
+  "db": {
+    "url": "postgresql://127.0.0.1:5432/postgres",
+    "user": "postgres",
+    "password": "${PGPASSWORD}",
+    "sslmode": "prefer",
+    "pool_size": 4,
+    "connect_timeout_s": 5,
+    "acquire_timeout_ms": 5000
+  }
+}

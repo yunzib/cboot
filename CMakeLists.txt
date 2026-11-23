@@ -123,6 +123,7 @@ install(FILES
     cmake/cbootPackage.cmake
     cmake/cbootComponent.cmake
     cmake/cbootComponentConfig.cmake.in
+    cmake/FindMySQL.cmake
     DESTINATION share/cmake/cboot
 )
 

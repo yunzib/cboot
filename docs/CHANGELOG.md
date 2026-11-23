@@ -1,11 +1,25 @@
 # 更新日志
 
+# 0.1.0 — 2026-11-23
+
+### 新增
+- 通用 ORM 方言抽象 `dialect` 与 MySQL 驱动 `cboot.orm.mysql`
+  （`MysqlProps` / `MysqlDataSource` / `mysql_component`）。
+
+### 重构
+- ORM 拆分为通用层 `cboot.orm` 与驱动 `cboot.orm.postgres` /
+  `cboot.orm.mysql`，通用层不再链接数据库客户端。
+- 组件构建支持 `PACKAGE_NAME`，驱动 target 与包名解耦。
+
 # 0.1.0 — 2026-11-22
 
 ### 新增
 - 契约组件装配：`Component` / `components` / `dependencies`、编译期闭包、
   组件 `hooks`、`app_beans_t` / `app_hooks_t`。
 - 定时任务拆为契约组件 `cboot.schedule`，支持固定延迟和 5/6 段 cron 表达式。
+- 契约组件 `cboot.orm`（PostgreSQL/libpq）：`Table` / `Column` / `Id` 实体元数据、
+  CRUD、类型安全 select/update/delete DSL（含 IN/LIKE/ILIKE）、连接池与 health；
+  `db` 配置的 password 支持留空 / `${PGPASSWORD}` / 环境变量。
 - 编译期 DI：`[[=Bean{}]]`、构造器注入、拓扑排序、生命周期与编译期诊断。
 - `[[=Named{"name"}]]` 同基类多实例；`[[=Value{"key"}]]` 标量配置注入。
 - `[[=Profile{"name"}]]` 条件装配：`cboot.profiles.active` 控制 bean 是否构造/挂载。
@@ -36,4 +50,4 @@
 - 压测客户端 RST 关闭，避免 TIME_WAIT 耗尽临时端口。
 
 ### 测试
-- 24 项 ctest，Debug/Release 全绿；14 个负面用例锁定诊断。
+- 25 项 ctest，Debug/Release 全绿；14 个负面用例锁定诊断。

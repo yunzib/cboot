@@ -3,8 +3,8 @@
 #
 # 与基础包共用 cboot_package_target 的 target/模块/测试逻辑，但独立安装导出：
 #   - 导出集：Cboot<Name>Targets
-#   - 包名：cboot.<name>
-#   - 包配置：cboot.<name>Config.cmake（find_dependency(cboot) 先行）
+#   - 包名：cboot.<name>，可用 PACKAGE_NAME 覆盖（如 cboot.orm.postgres）
+#   - 包配置：<包名>Config.cmake（find_dependency(cboot) 先行）
 # ============================================================================
 include_guard(GLOBAL)
 include("${CMAKE_CURRENT_LIST_DIR}/cbootPackage.cmake")
@@ -12,12 +12,19 @@ include(CMakePackageConfigHelpers)
 
 function(cboot_component name)
     cmake_parse_arguments(ARG ""
-        "VERSION;TIER"
+        "VERSION;TIER;PACKAGE_NAME"
         "MODULES;SOURCES;DEPENDS;TEST_SOURCES;PACKAGE_DEPENDS"
         ${ARGN})
 
     if(NOT ARG_VERSION)
         message(FATAL_ERROR "cboot_component(${name}): VERSION is required")
+    endif()
+
+    # PACKAGE_NAME 解耦 target 名与包名：
+    #   cboot_component(orm_postgres PACKAGE_NAME cboot.orm.postgres ...)
+    # target/别名是 cboot::orm_postgres；find_package 用 cboot.orm.postgres。
+    if(NOT ARG_PACKAGE_NAME)
+        set(ARG_PACKAGE_NAME "cboot.${name}")
     endif()
 
     # TIER 是声明式分类；契约组件固定为 contract。
@@ -42,7 +49,7 @@ function(cboot_component name)
 
     install(EXPORT "Cboot${name}Targets"
         NAMESPACE cboot::
-        DESTINATION "${CMAKE_INSTALL_DATADIR}/cmake/cboot.${name}")
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/cmake/${ARG_PACKAGE_NAME}")
 
     # 包配置模板随 cboot 包安装；in-tree 由根 CMake 提供 CBOOT_CMAKE_DIR
     if(NOT CBOOT_CMAKE_DIR AND cboot_CMAKE_DIR)
@@ -54,21 +61,21 @@ function(cboot_component name)
             "(in-tree: root CMake; standalone: find_package(cboot))")
     endif()
 
-    set(CBOOT_COMPONENT_NAME "cboot.${name}")
+    set(CBOOT_COMPONENT_NAME "${ARG_PACKAGE_NAME}")
     set(CBOOT_COMPONENT_EXPORT "Cboot${name}Targets")
     set(CBOOT_COMPONENT_DEPENDS "${ARG_PACKAGE_DEPENDS}")
     configure_package_config_file(
         "${CBOOT_CMAKE_DIR}/cbootComponentConfig.cmake.in"
-        "${CMAKE_CURRENT_BINARY_DIR}/cboot.${name}Config.cmake"
-        INSTALL_DESTINATION "${CMAKE_INSTALL_DATADIR}/cmake/cboot.${name}")
+        "${CMAKE_CURRENT_BINARY_DIR}/${ARG_PACKAGE_NAME}Config.cmake"
+        INSTALL_DESTINATION "${CMAKE_INSTALL_DATADIR}/cmake/${ARG_PACKAGE_NAME}")
 
     write_basic_package_version_file(
-        "${CMAKE_CURRENT_BINARY_DIR}/cboot.${name}ConfigVersion.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/${ARG_PACKAGE_NAME}ConfigVersion.cmake"
         VERSION ${ARG_VERSION}
         COMPATIBILITY SameMajorVersion)
 
     install(FILES
-        "${CMAKE_CURRENT_BINARY_DIR}/cboot.${name}Config.cmake"
-        "${CMAKE_CURRENT_BINARY_DIR}/cboot.${name}ConfigVersion.cmake"
-        DESTINATION "${CMAKE_INSTALL_DATADIR}/cmake/cboot.${name}")
+        "${CMAKE_CURRENT_BINARY_DIR}/${ARG_PACKAGE_NAME}Config.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/${ARG_PACKAGE_NAME}ConfigVersion.cmake"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/cmake/${ARG_PACKAGE_NAME}")
 endfunction()

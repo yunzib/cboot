@@ -24,5 +24,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/CbootTargets.cmake")
 
 # 契约组件独立构建时复用 cboot 安装的 helper 与包配置模板
 set(cboot_CMAKE_DIR "${CMAKE_CURRENT_LIST_DIR}")
+# 契约组件的 find_dependency(MySQL) 使用随 SDK 安装的 FindMySQL.cmake。
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}")
 
 check_required_components(cboot)
