@@ -34,6 +34,9 @@ struct RequireScope {
  * @brief 认证配置（前缀 auth）
  *
  * token_header/token_prefix 控制 token 提取；默认 Authorization: Bearer。
+ * token_cookie 非空时，header 缺失会回退到同名 Cookie。
+ * active_timeout_s > 0 时启用滑动续期：每次请求把过期时间延到
+ * now + active_timeout_s，但不超过 issued_at + timeout_s。
  * 路由策略：
  *   - public_paths 命中 → 放行
  *   - protected_paths 命中 → 认证
@@ -41,8 +44,14 @@ struct RequireScope {
  */
 struct [[=Config{"auth"}]] AuthProps {
     int timeout_s{7200};
+    int active_timeout_s{0};
     std::string token_header{"Authorization"};
     std::string token_prefix{"Bearer "};
+    std::string token_cookie;
+    std::string cookie_path{"/"};
+    std::string cookie_same_site{"Lax"};
+    bool cookie_secure{false};
+    bool cookie_http_only{true};
     std::string default_policy{"protected"};
     std::vector<std::string> public_paths;
     std::vector<std::string> protected_paths;
@@ -53,6 +62,7 @@ struct session {
     std::string subject;
     std::vector<std::string> roles;
     std::vector<std::string> scopes;
+    std::int64_t issued_at{};    // 登录时间；滑动续期的绝对上限基准
     std::int64_t expires_at{};
     std::string device;
 };
@@ -81,6 +91,16 @@ public:
 
     /** @brief 撤销某 subject 的全部 token（踢人） */
     virtual void revoke_subject(std::string_view subject) = 0;
+
+    /**
+     * @brief 滑动续期：把未过期 token 的 expires_at 改为新值
+     *
+     * 默认实现不续期（返回 false），持久化 store 应覆盖。
+     * 返回 true 表示 token 存在、未过期且已更新。
+     */
+    virtual bool touch(std::string_view /*token*/, std::int64_t /*expires_at*/) {
+        return false;
+    }
 };
 
 /** @brief 生成 32 字节随机 opaque token（hex）；供各 TokenStore 使用 */
@@ -96,6 +116,7 @@ public:
     std::optional<session> get(std::string_view token) const override;
     void revoke(std::string_view token) override;
     void revoke_subject(std::string_view subject) override;
+    bool touch(std::string_view token, std::int64_t expires_at) override;
 
     struct impl;
 
@@ -133,7 +154,20 @@ public:
     /** @brief 从请求提取 token（不查询）；无 token nullopt */
     std::optional<std::string_view> token(const web::request_context& ctx) const;
 
+    /**
+     * @brief 写入登录 Cookie（需配置 token_cookie）
+     *
+     * 未配置 token_cookie 时无操作；HttpOnly/Secure/SameSite 取自 AuthProps。
+     */
+    void attach_cookie(Response& response, std::string_view token) const;
+
+    /** @brief 写入清除登录 Cookie 的 Set-Cookie（需配置 token_cookie） */
+    void clear_cookie(Response& response) const;
+
 private:
+    void set_cookie(Response& response, std::string_view value,
+                    std::int64_t max_age) const;
+
     TokenStore& store_;
     AuthProps& props_;
 };

@@ -75,6 +75,10 @@ add_executable(cboot_web_middleware_smoke web/middleware_smoke.cpp)
 target_link_libraries(cboot_web_middleware_smoke PRIVATE cboot_web)
 add_test(NAME web_middleware_smoke COMMAND cboot_web_middleware_smoke)
 
+add_executable(cboot_cors_smoke web/cors_smoke.cpp)
+target_link_libraries(cboot_cors_smoke PRIVATE cboot_web cboot_app)
+add_test(NAME cors_smoke COMMAND cboot_cors_smoke)
+
 add_executable(cboot_web_server_smoke web/web_server_smoke.cpp)
 target_link_libraries(cboot_web_server_smoke PRIVATE cboot_web)
 add_test(NAME web_server_smoke COMMAND cboot_web_server_smoke)

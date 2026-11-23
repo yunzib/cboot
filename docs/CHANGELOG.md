@@ -17,6 +17,10 @@
   原生 SQL `query<T>` 按结果列名映射，驱动 statement 暴露列元数据。
 - 认证 RBAC：`RequireRole` / `RequireScope` 方法级/控制器级注解、
   `auth_policy_hook` 策略合并、403 与 `authorization_failed` 事件。
+- 认证传输与续期：`token_cookie` Cookie 回退、`attach_cookie` /
+  `clear_cookie`；`active_timeout_s` 滑动续期与 `TokenStore::touch`。
+- CORS：可选 `cors_component`（来源白名单/通配、预检 204、方法/
+  请求头校验、凭证与暴露头）。
 - 配置源：CLI `--key=value` / `--config`、`CB_` 环境变量，优先级
   CLI > env > JSON；配置绑定错误聚合全部非法键。
 - `cboot.auth.postgres`：`PgTokenStore`（表 `cboot_auth_sessions`）；

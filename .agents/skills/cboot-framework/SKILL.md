@@ -23,6 +23,7 @@ cboot-framework 把 Spring 的运行时装配搬到编译期：注解在编译�
   - **契约组件**：`schedule`、`orm`、`orm.postgres`、`orm.mysql`、
     `jwt`、`auth`、`auth.postgres` 等，独立包 `cboot.<name>`；驱动组件可用 `PACKAGE_NAME`
     解耦 target 名与包名（`orm_postgres` / `cboot.orm.postgres`）。
+    `web` 包内另有可选 `cors_component`（`import cboot.web.cors`）。
     `auth` 与 `jwt` 相互独立。
     描述符声明 `beans` / `dependencies` / `hooks`，由应用 `components` 选择。
     首个真实组件是 `cboot.schedule`（`Scheduled` 注解 + 调度 hook）。
@@ -378,6 +379,10 @@ struct App : application<App> {
   包含 `OPTIONS`。`request_context` 有类型化属性槽（`put/find`）。
 - handler 可声明 `const web::request_context&` 参数；顺序：
   parser → middleware → route → aspects → handler。
+- CORS：可选 `cors_component`（`cboot::web`）贡献 `web::CorsProps` +
+  全局 `web::Cors`（order -1000）。来源白名单支持 `*` 通配；预检
+  `OPTIONS` 204 短路，校验方法/请求头；`allow_credentials` 禁止裸 `*`。
+  不选组件则无 CORS 行为。
 - `cboot.jwt`：`JwtProps`（前缀 `jwt`）、`JwtVerifier`；HS256/RS256，
   exp/nbf/iss/aud，OpenSSL 只在实现单元 include。测试/运行时需 OpenSSL。
 - `cboot.auth`：登录态 starter，不依赖 jwt。核心组件 `auth_component`
@@ -386,15 +391,21 @@ struct App : application<App> {
 - `AuthGuard` 按 `public_paths` / `protected_paths` / `default_policy` 匹配；
   成功写入 `auth::session`，失败 401；发布 `authentication_*` /
   `authorization_failed` 事件。
+- token 传输：`token_header`/`token_prefix`，`token_cookie` 非空时 header
+  缺失回退 Cookie；`attach_cookie` / `clear_cookie` 写 Set-Cookie。
+- 滑动续期：`active_timeout_s > 0` 时每次认证把 expires_at 延到
+  `now + active_timeout_s`，上限 `issued_at + timeout_s`；store 覆盖
+  `touch(token, expires_at)` 才落库（memory/PG 已实现）。
 - RBAC：`[[=auth::RequireRole{"admin"}]]` / `[[=auth::RequireScope{"..."}]]`
   可标在 handler 或控制器类型；类级要求对全部路由生效，方法级追加。
   `auth_policy_hook` 启动时合并类级+方法级要求填充 AuthPolicy，AuthGuard
   查表返回 403。web 不依赖 auth。
-- `cboot.auth.postgres`：`PgTokenStore`（表 `cboot_auth_sessions`），
-  替代 Redis/内存 store；依赖 `auth_component` + `postgres_component`。
+- `cboot.auth.postgres`：`PgTokenStore`（表 `cboot_auth_sessions`，
+  含 `issued_at`，PostConstruct 自动补列），替代 Redis/内存 store；
+  依赖 `auth_component` + `postgres_component`。
 - CMake：`cboot::auth` / `cboot::auth_postgres` / `cboot::jwt`；
   auth 不依赖 OpenSSL，jwt 依赖 OpenSSL。
-- 测试：`web_middleware_smoke`、`jwt_smoke`、`auth_smoke`、
+- 测试：`web_middleware_smoke`、`cors_smoke`、`jwt_smoke`、`auth_smoke`、
   `auth_postgres_smoke`（需 `CBOOT_TEST_PG_URL`）。
 
 ## 健康检查
@@ -425,7 +436,8 @@ struct App : application<App> {
   `cboot_package(... TEST_SOURCES test/<pkg>_smoke.cpp)`，测试目标会自动
   直接链接本包 `DEPENDS` 的 provider target。
 - 改公开 API 后同时更新 `README.md`、`docs/使用手册.md`、
-  `docs/契约组件.md`、`docs/定时任务.md` 与 `docs/ORM.md`；
+  `docs/契约组件.md`、`docs/定时任务.md`、`docs/ORM.md`、
+  `docs/认证.md` 与 `docs/CORS.md`；
   `docs/任务清单.md` 是本地忽略文件，按需更新。
 
 ## GCC 16 反射/模块排错清单

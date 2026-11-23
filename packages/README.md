@@ -22,6 +22,8 @@
 
 middleware 不新增描述符字段：中间件是 `[[=Bean{}]]` +
 `[[=web::Middleware{...}]]` 的角色；应用启动时从 `app_beans_t` 收集。
+`web` 包另导出可选 `cors_component`（来源白名单 / 预检 / 凭证），
+不选则无 CORS 行为。
 
 驱动组件用 `cboot_component` 的 `PACKAGE_NAME` 把 target 名与包名解耦：
 

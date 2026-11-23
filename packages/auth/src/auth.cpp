@@ -86,6 +86,26 @@ std::string_view trim(std::string_view s) {
     return s;
 }
 
+/** @brief 读取 Cookie 值；未命中 nullopt（值不 URL 解码） */
+std::optional<std::string_view> cookie_value(const Request& request,
+                                             std::string_view name) {
+    const auto header = request.header("Cookie");
+    if (!header) return std::nullopt;
+
+    std::string_view rest = *header;
+    while (!rest.empty()) {
+        const std::size_t semi = rest.find(';');
+        std::string_view item = rest.substr(0, semi);
+        rest = semi == std::string_view::npos ? std::string_view{}
+                                              : rest.substr(semi + 1);
+        const std::size_t eq = item.find('=');
+        if (eq == std::string_view::npos) continue;
+        if (trim(item.substr(0, eq)) == name)
+            return trim(item.substr(eq + 1));
+    }
+    return std::nullopt;
+}
+
 std::vector<std::string_view> split_path(std::string_view path) {
     std::vector<std::string_view> out;
     std::size_t i = 0;
@@ -147,7 +167,7 @@ struct MemoryTokenStore::impl {
     std::int64_t expiry_for(const session& s) const {
         if (s.expires_at > 0) return s.expires_at;
         const int timeout = props->timeout_s > 0 ? props->timeout_s : 7200;
-        return now_seconds() + timeout;
+        return s.issued_at + timeout;
     }
 };
 
@@ -159,6 +179,7 @@ MemoryTokenStore::MemoryTokenStore(AuthProps& props)
 MemoryTokenStore::~MemoryTokenStore() = default;
 
 std::string MemoryTokenStore::create(session s) {
+    if (s.issued_at <= 0) s.issued_at = now_seconds();
     if (s.expires_at <= 0) s.expires_at = impl_->expiry_for(s);
     std::string token;
     {
@@ -195,37 +216,54 @@ void MemoryTokenStore::revoke_subject(std::string_view subject) {
     }
 }
 
+bool MemoryTokenStore::touch(std::string_view token, std::int64_t expires_at) {
+    std::lock_guard lock(impl_->mu);
+    auto it = impl_->tokens.find(std::string(token));
+    if (it == impl_->tokens.end()) return false;
+    if (it->second.expires_at > 0 && now_seconds() > it->second.expires_at) {
+        impl_->tokens.erase(it);
+        return false;
+    }
+    it->second.expires_at = expires_at;
+    return true;
+}
+
 // ==================== AuthService ====================
 
 AuthService::AuthService(TokenStore& store, AuthProps& props)
     : store_(store), props_(props) {}
 
 std::string AuthService::login(session s) {
+    if (s.issued_at <= 0) s.issued_at = now_seconds();
     if (s.expires_at <= 0) {
         const int timeout = props_.timeout_s > 0 ? props_.timeout_s : 7200;
-        s.expires_at = now_seconds() + timeout;
+        s.expires_at = s.issued_at + timeout;
     }
     return store_.create(std::move(s));
 }
 
 std::optional<std::string_view> AuthService::token(
     const web::request_context& ctx) const {
-    const auto header = ctx.request.header(props_.token_header);
-    if (!header) return std::nullopt;
+    if (const auto header = ctx.request.header(props_.token_header)) {
+        std::string_view value = trim(*header);
+        if (props_.token_prefix.empty()) {
+            return value.empty() ? std::nullopt
+                                 : std::optional<std::string_view>(value);
+        }
 
-    std::string_view value = trim(*header);
-    if (props_.token_prefix.empty()) {
+        if (value.size() < props_.token_prefix.size()) return std::nullopt;
+        if (!iequals(value.substr(0, props_.token_prefix.size()),
+                     props_.token_prefix))
+            return std::nullopt;
+        value = trim(value.substr(props_.token_prefix.size()));
         return value.empty() ? std::nullopt
                              : std::optional<std::string_view>(value);
     }
 
-    if (value.size() < props_.token_prefix.size()) return std::nullopt;
-    if (!iequals(value.substr(0, props_.token_prefix.size()),
-                 props_.token_prefix))
-        return std::nullopt;
-    value = trim(value.substr(props_.token_prefix.size()));
-    if (value.empty()) return std::nullopt;
-    return value;
+    // header 缺失才回退 Cookie；header 存在但格式错误时不混用两种来源。
+    if (!props_.token_cookie.empty())
+        return cookie_value(ctx.request, props_.token_cookie);
+    return std::nullopt;
 }
 
 std::optional<session> AuthService::find(std::string_view token) const {
@@ -237,7 +275,20 @@ std::optional<session> AuthService::current(
     const web::request_context& ctx) const {
     const auto t = token(ctx);
     if (!t) return std::nullopt;
-    return find(*t);
+    auto s = find(*t);
+    if (!s) return std::nullopt;
+
+    // 滑动续期：活跃请求延长空闲过期，但不超过 issued_at + timeout_s。
+    if (props_.active_timeout_s > 0) {
+        const std::int64_t idle = now_seconds() + props_.active_timeout_s;
+        std::int64_t cap = 0;
+        if (s->issued_at > 0 && props_.timeout_s > 0)
+            cap = s->issued_at + props_.timeout_s;
+        const std::int64_t next = (cap > 0 && idle > cap) ? cap : idle;
+        if (next > s->expires_at && store_.touch(*t, next))
+            s->expires_at = next;
+    }
+    return s;
 }
 
 void AuthService::logout(const web::request_context& ctx) {
@@ -250,6 +301,45 @@ void AuthService::logout(std::string_view token) {
 
 void AuthService::kickout(std::string_view subject) {
     store_.revoke_subject(subject);
+}
+
+void AuthService::set_cookie(Response& response, std::string_view value,
+                             std::int64_t max_age) const {
+    if (props_.token_cookie.empty()) return;
+
+    const std::string_view path =
+        props_.cookie_path.empty() ? std::string_view("/")
+                                   : std::string_view(props_.cookie_path);
+    const std::string_view same_site =
+        props_.cookie_same_site.empty() ? std::string_view("Lax")
+                                        : std::string_view(props_.cookie_same_site);
+
+    std::string v;
+    v.reserve(props_.token_cookie.size() + value.size() + path.size()
+              + same_site.size() + 48);
+    v += props_.token_cookie;
+    v += '=';
+    v += value;
+    v += "; Path=";
+    v += path;
+    v += "; Max-Age=";
+    v += std::to_string(max_age);
+    if (props_.cookie_http_only) v += "; HttpOnly";
+    if (props_.cookie_secure) v += "; Secure";
+    v += "; SameSite=";
+    v += same_site;
+    response.header("Set-Cookie", std::move(v));
+}
+
+void AuthService::attach_cookie(Response& response,
+                                std::string_view token) const {
+    const std::int64_t max_age =
+        props_.timeout_s > 0 ? props_.timeout_s : 7200;
+    set_cookie(response, token, max_age);
+}
+
+void AuthService::clear_cookie(Response& response) const {
+    set_cookie(response, {}, 0);
 }
 
 // ==================== AuthGuard ====================

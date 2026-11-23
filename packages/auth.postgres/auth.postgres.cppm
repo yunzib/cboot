@@ -23,9 +23,10 @@ export namespace auth {
  *
  * 表 cboot_auth_sessions：
  *   token TEXT PRIMARY KEY, subject TEXT, roles_json TEXT, scopes_json TEXT,
- *   expires_at BIGINT, device TEXT
+ *   issued_at BIGINT, expires_at BIGINT, device TEXT
  *
  * 启动时 [[=PostConstruct]] 建表和 subject 索引。
+ * 旧表需手动补 issued_at 列（见文档迁移说明）。
  */
 class [[=Bean{}]] PgTokenStore final : public TokenStore {
 public:
@@ -36,6 +37,7 @@ public:
     std::optional<session> get(std::string_view token) const override;
     void revoke(std::string_view token) override;
     void revoke_subject(std::string_view subject) override;
+    bool touch(std::string_view token, std::int64_t expires_at) override;
 
     /** @brief 建表/索引；PostConstruct 自动调用 */
     [[=PostConstruct{}]] void ensure_schema();

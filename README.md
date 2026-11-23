@@ -26,10 +26,12 @@
 - **DTO 校验**：`[[=validation::NotBlank{}]]` / `[[=validation::Range{...}]]`，
   body 绑定自动校验，失败返回 400 + 字段错误列表。
 - **middleware**：Bean 角色 + 全局/路由级链，支持 `Request` headers、
-  `request_context`、短路、CORS/OPTIONS；中间件失败不会进入 handler。
+  `request_context`、短路、OPTIONS；中间件失败不会进入 handler。
+- **CORS**：可选 `cors_component`，来源白名单/通配、预检 204、
+  方法/请求头校验、凭证与暴露头。
 - **认证**：`cboot.auth` 登录态（opaque token、login/logout/kickout、
   路由策略、控制器级/方法级 `RequireRole`/`RequireScope`、Memory/PostgreSQL TokenStore、
-  认证事件）；`cboot.jwt` 独立提供 HS256/RS256 校验。
+  Header/Cookie 传输、滑动续期、认证事件）；`cboot.jwt` 独立提供 HS256/RS256 校验。
 - **AOP**：编译期切面链，零代理、零虚调用。
 - **事件**：`[[=EventListener{}]]` + `ctx.publish` / 注入 `event_publisher`，
   同步派发、顺序稳定、异常隔离，可接 `aspect_chain`。
@@ -234,6 +236,7 @@ Release 构建、8 连接、16 万请求、0 失败：
 - [定时任务](docs/定时任务.md)
 - [DTO 校验](docs/校验.md)
 - [中间件](docs/中间件.md)
+- [CORS](docs/CORS.md)
 - [自定义认证](docs/自定义认证.md)
 - [认证](docs/认证.md)
 - [JWT](docs/JWT.md)

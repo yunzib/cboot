@@ -160,6 +160,89 @@ int main(int argc, char**) {
     service.logout(fresh);
     if (r.dispatch("GET", "/api/me", "", headers).status != 401) return 12;
 
+    // ── Cookie 传输 / 滑动续期 ─────────────────────────────────────────
+    props.token_cookie = "cboot_token";
+    const std::string cookie_token = service.login(auth::session{
+        .subject = "cookie-user", .roles = {"admin"}, .scopes = {"write"}});
+
+    const std::string cookie_headers =
+        "Cookie: theme=dark; cboot_token=" + cookie_token + "\r\n";
+    const Request cookie_req{.method = "GET", .path = "/api/me",
+                                  .query = {}, .body = {},
+                                  .headers = cookie_headers};
+    web::request_context cookie_ctx(cookie_req);
+    const auto cookie_session = service.current(cookie_ctx);
+    if (!cookie_session || cookie_session->subject != "cookie-user") return 18;
+    if (service.token(cookie_ctx) != cookie_token) return 19;
+
+    // header 优先于 Cookie
+    const std::string header_token = service.login(
+        auth::session{.subject = "header-user", .roles = {"admin"}});
+    const std::string both_headers = "Authorization: Bearer " + header_token
+        + "\r\nCookie: cboot_token=" + cookie_token + "\r\n";
+    const Request both_req{.method = "GET", .path = "/api/me",
+                                .query = {}, .body = {}, .headers = both_headers};
+    web::request_context both_ctx(both_req);
+    const auto both_session = service.current(both_ctx);
+    if (!both_session || both_session->subject != "header-user") return 20;
+
+    // Set-Cookie 辅助
+    Response set_cookie;
+    service.attach_cookie(set_cookie, cookie_token);
+    bool cookie_ok = false;
+    for (const auto& [name, value] : set_cookie.headers)
+        if (name == "Set-Cookie")
+            cookie_ok = value.find("cboot_token=" + cookie_token)
+                    != std::string::npos
+                && value.find("HttpOnly") != std::string::npos
+                && value.find("SameSite=Lax") != std::string::npos;
+    if (!cookie_ok) return 21;
+
+    Response clear_cookie;
+    service.clear_cookie(clear_cookie);
+    bool cleared = false;
+    for (const auto& [name, value] : clear_cookie.headers)
+        if (name == "Set-Cookie")
+            cleared = value.find("cboot_token=;") != std::string::npos
+                && value.find("Max-Age=0") != std::string::npos;
+    if (!cleared) return 22;
+
+    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+
+    props.active_timeout_s = 60;
+    const std::string sliding = service.login(auth::session{
+        .subject = "slide-user",
+        .issued_at = now - 100,
+        .expires_at = now + 10,
+    });
+    const auto before = service.find(sliding)->expires_at;
+    const std::string slide_headers =
+        "Authorization: Bearer " + sliding + "\r\n";
+    const Request slide_req{.method = "GET", .path = "/api/me",
+                                 .query = {}, .body = {},
+                                 .headers = slide_headers};
+    web::request_context slide_ctx(slide_req);
+    if (!service.current(slide_ctx)) return 23;
+    const auto after = service.find(sliding)->expires_at;
+    if (after <= before || after > now + 61) return 24;
+
+    // 滑动不能突破 issued_at + timeout_s 的绝对上限
+    props.active_timeout_s = 600;
+    const std::string capped = service.login(auth::session{
+        .subject = "cap-user",
+        .issued_at = now - 3590,
+        .expires_at = now + 5,
+    });
+    const std::string cap_headers =
+        "Authorization: Bearer " + capped + "\r\n";
+    const Request cap_req{.method = "GET", .path = "/api/me",
+                          .query = {}, .body = {}, .headers = cap_headers};
+    web::request_context cap_ctx(cap_req);
+    if (!service.current(cap_ctx)) return 25;
+    if (service.find(capped)->expires_at > now + 11) return 26;
+    props.active_timeout_s = 0;
+
     // 未知路径不触发认证（404）
     counts = {};
     if (r.dispatch("GET", "/missing", "").status != 404) return 13;
