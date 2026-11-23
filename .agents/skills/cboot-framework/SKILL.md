@@ -329,6 +329,10 @@ struct App : application<App> {
   `[[=orm::Id{.generated=true}]]`；实体是 aggregate，恰好一个 Id。
 - `EntityManager`：`find/all/insert/update/remove/create_schema/drop_schema`；
   自增主键按 dialect 选择 `RETURNING` 或 `last_insert_id`。
+- 事务：`db.transaction([](orm::session& tx) { ... })`；固定一个连接，
+  正常提交、异常回滚；session 提供同样的 CRUD/DSL/原生 SQL。
+- 原生 SQL：`fetch_rows` 按 SELECT 列顺序映射；`query<T>` 按结果列名
+  映射，支持 alias/join；驱动 statement 提供 `column_count/column_name`。
 - DSL：`db.select<T>().where(...).order_by(...).limit()/offset().fetch()`；
   `col<^^T::field>()`，支持比较、`is_null`、`in`、`like/ilike`、`&&/||/!`。
   条件保存 AST，执行时才按 `dialect` 渲染。
@@ -344,7 +348,7 @@ struct App : application<App> {
   MySQL 测试 target 会复制 DLL。
 - 集成测试：`CBOOT_TEST_PG_URL`、`CBOOT_TEST_MYSQL_DATABASE`（及可选
   `CBOOT_TEST_MYSQL_HOST/PORT/USER/PASSWORD`）；未设置时只跑单元测试。
-- 事务/session、原生 SQL 查询映射、repository 模板尚未接入。
+- repository 模板尚未接入；事务为单层，不支持嵌套/savepoint。
 
 ## DTO 校验（基础包 cboot.validation）
 

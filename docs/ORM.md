@@ -25,7 +25,7 @@
 - 迁移工具、数据库版本管理
 - 复合主键、联合索引、乐观锁
 - 异步数据库调用
-- 事务 API（当前未提供；需要时使用连接级原生 SQL）
+- 嵌套事务 / savepoint / 隔离级别配置
 
 ## 2. 包结构
 
@@ -361,26 +361,154 @@ db.update(*u);
 db.remove<User>(42);
 ```
 
-## 7. 原生 SQL 逃生口
+## 7. 事务与原生 SQL
+
+### 7.1 事务
+
+```cpp
+db.transaction([](orm::session& tx) {
+    User u{.name = "alice", .active = true};
+    tx.insert(u);
+
+    tx.execute("UPDATE stock SET count = count - 1 WHERE id = "
+                   + tx.dialect().placeholder(1), {1});
+
+    // 抛异常 → ROLLBACK
+    // 正常返回 → COMMIT
+});
+```
+
+语义：
+
+- 从连接池借一个连接并固定给 `session`
+- 事务内 CRUD / DSL / 原生 SQL 共用同一连接
+- 正常返回 → `COMMIT`
+- 抛异常 → `ROLLBACK` 后重新抛出
+- `session` 析构未完成时自动回滚
+- 不支持嵌套事务/savepoint
+- `session` 不是线程安全的
+
+事务内访问数据库必须使用传入的 `tx`：
+
+- `tx.insert/update/remove`
+- `tx.select/update/remove` DSL
+- `tx.query/fetch_rows/execute`
+
+不要在事务回调里调用 `EntityManager` 的 CRUD。`EntityManager` 会再从池里
+借一个连接，这些操作不属于当前 `tx`，也不会随 `tx` 一起回滚。
+
+```cpp
+User a{.name = "alice", .active = true};
+User b{.name = "bob", .active = true};
+
+db.transaction([&](orm::session& tx) {
+    tx.insert(a);        // 在事务内
+    // db.insert(b);     // 错：另一个连接，独立于当前事务
+});
+```
+
+#### 异常与失败处理
+
+回调内抛异常会立即回滚，异常继续向外传播：
+
+```cpp
+void transfer(orm::EntityManager& db, int amount) {
+    try {
+        db.transaction([&](orm::session& tx) {
+            if (amount < 0)
+                throw orm::error("amount must be non-negative");
+
+            tx.execute(
+                "UPDATE account SET balance = balance - "
+                    + tx.dialect().placeholder(1)
+                    + " WHERE id = " + tx.dialect().placeholder(2),
+                {std::int64_t(amount), std::int64_t(1)});
+        });
+    } catch (const std::exception& e) {
+        std::println("transaction rolled back: {}", e.what());
+        throw;   // 或转成 400/409/500
+    }
+}
+```
+
+要点：
+
+- 回滚发生在 `transaction` 内部；外层 `catch` 时数据已经回滚
+- **不要在回调内 `catch` 后正常返回**，否则事务会继续提交
+- 如果需要在回调外统一转 HTTP 状态，直接把异常抛到外层
+
+#### 显式取消
+
+需要主动取消时调用 `tx.rollback()`：
+
+```cpp
+User pending{.name = "pending", .active = true};
+const bool cancelled = pending.name.empty();
+
+db.transaction([&](orm::session& tx) {
+    tx.insert(pending);
+
+    if (cancelled) {
+        tx.rollback();   // 立即回滚
+        return;          // 正常返回，但 transaction 检测 finished() 后不再 COMMIT
+    }
+
+    // 后续操作
+});
+```
+
+`tx.rollback()` 后回调可以正常返回；`transaction` 看到 `session::finished()`
+为 true，会跳过 `COMMIT`。
+
+如果回调有返回值，rollback 后仍会把该值返回给调用方，但数据并未提交；
+业务上不要把这种返回值当作成功结果。
+
+#### 返回值
+
+```cpp
+auto created = db.transaction([](orm::session& tx) {
+    User u{.name = "alice", .active = true};
+    tx.insert(u);
+    return u;
+});
+```
+
+只有 `transaction` 正常返回后才表示已提交；rollback 分支不应返回
+“成功”语义的对象。
+
+### 7.2 原生 SQL
 
 join / 聚合 / CTE / 方言特性走原生 SQL：
 
 ```cpp
-auto rows = db.fetch_rows<User>(R"(
-    SELECT u.id, u.display_name, u.email, u.active
+auto rows = db.query<User>(R"(
+    SELECT u.id,
+           u.display_name,
+           u.email,
+           u.active
     FROM users u
     JOIN orders o ON o.user_id = u.id
     WHERE u.active = $1
 )", {true});
 ```
 
-规则：
+`query<T>` 按**结果列名**映射，允许列顺序不同：
 
-- 结果列顺序必须与实体成员顺序一致
+- 列名与实体 `Column` 元数据匹配
+- 缺列抛 `orm::error`
+- `fetch_rows<T>` 仍按 SELECT 列顺序映射，作为更低层入口
 - 参数通过 `db_value` 传入；PostgreSQL 用 `$n`，MySQL 用 `?`
 - SQL 字符串由调用方负责；ORM 只做连接、绑定、映射
 - MySQL 文本协议会把 SQL 中的每个 `?` 都当作参数占位符，
   原生 SQL 里需要字面量 `?` 时请改用其他写法
+
+事务内同样可用：
+
+```cpp
+db.transaction([](orm::session& tx) {
+    auto rows = tx.query<User>("SELECT ...", {});
+});
+```
 
 ## 8. 连接池与配置
 
@@ -486,6 +614,8 @@ public:
     virtual std::int64_t get_int(std::size_t column) = 0;
     virtual double get_double(std::size_t column) = 0;
     virtual std::string_view get_text(std::size_t column) = 0;
+    virtual std::size_t column_count() const = 0;
+    virtual std::string_view column_name(std::size_t column) const = 0;
     virtual std::size_t affected_rows() const = 0;
 };
 
@@ -643,13 +773,16 @@ CBOOT_TEST_MYSQL_PASSWORD=****** \
 - DSL select（where + order_by）
 - update / remove
 - optional 列 NULL ↔ nullopt
+- transaction commit / rollback
+- `query<T>` 按列名映射（列顺序打乱）
 
 没有对应环境变量时跳过集成测试，只跑单元测试。
 
 ## 14. 限制
 
 - 同步调用；DB 阻塞会占用 worker 线程
-- 无事务 API；无关系映射、懒加载、identity map
+- 事务支持单层；无嵌套事务 / savepoint / 隔离级别配置；MySQL DDL 会隐式提交
+- 无关系映射、懒加载、identity map
 - 无迁移工具；只有 `create_schema` / `drop_schema`
 - 无复合主键、联合索引、乐观锁
 - DSL 只覆盖单表常用查询；join/聚合/CTE 走原生 SQL
@@ -668,7 +801,7 @@ CBOOT_TEST_MYSQL_PASSWORD=****** \
 | 方言边界 | `orm::dialect` 负责标识符/占位符/类型/能力 |
 | 自增主键 | PostgreSQL `RETURNING`；MySQL `last_insert_id` |
 | 枚举存储 | `TEXT` / `TINYINT` 等逻辑类型映射 |
-| 事务 | 未提供 |
+| 事务 | `EntityManager::transaction` + 固定连接的 `session` |
 | schema | `Table{.name, .schema}`；MySQL 映射 database |
 | 关系映射 | 不做 |
 | 迁移 | 不做 |
@@ -731,13 +864,29 @@ CBOOT_TEST_MYSQL_PASSWORD=****** \
 | `template<class T> select_builder<T, EntityManager> select()` | DSL 查询入口 |
 | `template<class T> update_builder<T, EntityManager> update()` | DSL 条件更新入口 |
 | `template<class T> delete_builder<T, EntityManager> remove()` | DSL 条件删除入口 |
-| `template<class T> std::vector<T> fetch_rows(sql, params)` | 低层查询 + 行映射 |
+| `template<class F> transaction(fn)` | 单连接事务；正常提交、异常回滚 |
+| `template<class T> std::vector<T> fetch_rows(sql, params)` | 低层查询；按 SELECT 列顺序映射 |
+| `template<class T> std::vector<T> query(sql, params = {})` | 原生 SQL；按结果列名映射，支持 alias/join |
 | `std::size_t execute(sql, params)` | 低层 DML/DDL；返回影响行数 |
 
 `id_type<T>` 是实体 `Id` 成员的声明类型。
 `entity_meta_v<T>` 是编译期元数据（表名/列名/主键）。
 
-### 16.5 DSL
+### 16.5 `orm::session`
+
+事务内使用，固定一个连接：
+
+| 接口 | 说明 |
+|---|---|
+| `dialect()` | 当前方言 |
+| `find/all/insert/update/remove` | 与 EntityManager 相同的 CRUD |
+| `select/update/remove` | DSL builder |
+| `fetch_rows/query/execute` | 原生 SQL |
+| `commit()` / `rollback()` | 手动结束事务；通常由 transaction 自动处理 |
+
+`session` 不能跨线程，也不能在事务内重新调用 `EntityManager`。
+
+### 16.6 DSL
 
 列引用：
 
@@ -779,17 +928,17 @@ orm::col<^^User::name>()
 | `where(condition)` | 必填；防止误删全表 |
 | `execute()` | 返回影响行数 |
 
-### 16.6 驱动接口
+### 16.7 驱动接口
 
 | 类型 | 接口 |
 |---|---|
 | `orm::DataSource` | `connection_lease acquire()` / `const dialect& dialect()` |
 | `orm::connection` | `prepare(sql)` / `execute(sql)` / `last_insert_id()` |
-| `orm::statement` | `bind(i, value)` / `next()` / `is_null(col)` / `get_int` / `get_double` / `get_text` / `affected_rows()` |
+| `orm::statement` | `bind(i, value)` / `next()` / `is_null(col)` / `get_int` / `get_double` / `get_text` / `column_count` / `column_name` / `affected_rows()` |
 | `orm::connection_lease` | RAII 归还连接；`operator->` 访问 connection |
 | `orm::dialect` | 标识符/占位符/类型/自增/RETURNING/ILIKE 能力 |
 
-### 16.7 错误
+### 16.8 错误
 
 - 编译期：实体元数据/DSL 类型错误
 - 运行期：`orm::error`，消息带连接/查询/映射错误

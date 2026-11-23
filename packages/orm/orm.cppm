@@ -3,7 +3,7 @@
  * @brief ORM 通用组件公共入口
  *
  * 重新导出实体注解、驱动接口、元数据和 DSL；
- * 本模块只实现 EntityManager 与通用 orm_component。
+ * 本模块实现 EntityManager、事务 session 与通用 orm_component。
  *
  * 具体数据库由独立驱动组件提供：
  *   - cboot.orm.postgres → postgres_component
@@ -30,6 +30,238 @@ export import cboot.orm.dsl;
 
 export namespace orm {
 
+namespace detail {
+
+// ── 连接级操作：EntityManager 与 session 共用 ─────────────────────────
+
+template <class T>
+std::optional<T> find_impl(connection& conn, const dialect& d,
+                           const id_type<T>& id) {
+    auto stmt = conn.prepare(select_by_id_sql<T>(d));
+    stmt->bind(0, to_db_value(id));
+    if (!stmt->next()) return std::nullopt;
+    return read_row<T>(*stmt);
+}
+
+template <class T>
+std::vector<T> all_impl(connection& conn, const dialect& d) {
+    auto stmt = conn.prepare(select_all_sql<T>(d));
+    std::vector<T> out;
+    while (stmt->next()) out.push_back(read_row<T>(*stmt));
+    return out;
+}
+
+template <class T>
+void insert_impl(connection& conn, const dialect& d, T& entity) {
+    const auto& meta = entity_meta_v<T>;
+    auto stmt = conn.prepare(insert_sql<T>(d));
+    auto values = insert_values(entity);
+    for (std::size_t i = 0; i < values.size(); ++i)
+        stmt->bind(i, values[i]);
+
+    if (!meta.id_generated) {
+        (void)stmt->next();
+        return;
+    }
+
+    auto& id = entity.[:nth_member<T, meta.id_index>():];
+    if (d.supports_returning()) {
+        if (!stmt->next())
+            throw error("cboot.orm: INSERT RETURNING produced no row");
+        read_scalar(*stmt, 0, id);
+        return;
+    }
+
+    (void)stmt->next();
+    const std::int64_t generated = conn.last_insert_id();
+    id = static_cast<std::remove_cvref_t<decltype(id)>>(generated);
+}
+
+template <class T>
+std::size_t update_impl(connection& conn, const dialect& d, const T& entity) {
+    auto stmt = conn.prepare(update_sql<T>(d));
+    auto values = update_values(entity);
+    for (std::size_t i = 0; i < values.size(); ++i)
+        stmt->bind(i, values[i]);
+    (void)stmt->next();
+    return stmt->affected_rows();
+}
+
+template <class T>
+std::size_t remove_impl(connection& conn, const dialect& d,
+                        const id_type<T>& id) {
+    auto stmt = conn.prepare(delete_sql<T>(d));
+    stmt->bind(0, to_db_value(id));
+    (void)stmt->next();
+    return stmt->affected_rows();
+}
+
+template <class T>
+std::vector<T> fetch_rows_impl(connection& conn, std::string_view sql,
+                               const std::vector<db_value>& params) {
+    auto stmt = conn.prepare(sql);
+    for (std::size_t i = 0; i < params.size(); ++i)
+        stmt->bind(i, params[i]);
+    std::vector<T> out;
+    while (stmt->next()) out.push_back(read_row<T>(*stmt));
+    return out;
+}
+
+template <class T>
+std::vector<T> query_impl(connection& conn, std::string_view sql,
+                          const std::vector<db_value>& params) {
+    auto stmt = conn.prepare(sql);
+    for (std::size_t i = 0; i < params.size(); ++i)
+        stmt->bind(i, params[i]);
+    return fetch_rows_named<T>(*stmt);
+}
+
+inline std::size_t execute_impl(connection& conn, std::string_view sql,
+                                const std::vector<db_value>& params) {
+    auto stmt = conn.prepare(sql);
+    for (std::size_t i = 0; i < params.size(); ++i)
+        stmt->bind(i, params[i]);
+    (void)stmt->next();
+    return stmt->affected_rows();
+}
+
+template <class T>
+void create_schema_impl(connection& conn, const dialect& d) {
+    conn.execute(create_table_sql<T>(d));
+}
+
+template <class T>
+void drop_schema_impl(connection& conn, const dialect& d) {
+    conn.execute(drop_table_sql<T>(d));
+}
+
+} // namespace detail
+
+/**
+ * @brief 固定单连接的 ORM 事务会话
+ *
+ * session 持有连接租借，事务内的 CRUD/DSL/原生 SQL 共用同一连接。
+ * 正常路径由 EntityManager::transaction 提交；析构未完成时回滚。
+ * session 不是线程安全的，也不支持嵌套。
+ */
+class session {
+public:
+    session(connection_lease lease, const dialect& d)
+        : lease_(std::move(lease)), dialect_(&d) {}
+    ~session() {
+        if (!finished_) rollback_noexcept();
+    }
+
+    session(const session&) = delete;
+    session& operator=(const session&) = delete;
+    session(session&&) noexcept = default;
+    session& operator=(session&&) noexcept = delete;
+
+    /** @brief 当前事务方言 */
+    const dialect& dialect() const { return *dialect_; }
+
+    /** @brief 提交；已结束则抛错 */
+    void commit() {
+        if (finished_) throw error("cboot.orm: transaction already finished");
+        lease_->execute("COMMIT");
+        finished_ = true;
+    }
+
+    /** @brief 回滚；已结束则忽略 */
+    void rollback() {
+        if (finished_) return;
+        lease_->execute("ROLLBACK");
+        finished_ = true;
+    }
+
+    /** @brief 事务是否已提交/回滚（用于 transaction 避免重复 COMMIT） */
+    bool finished() const { return finished_; }
+
+    template <class T>
+    std::optional<T> find(const id_type<T>& id) {
+        return detail::find_impl<T>(*lease_, *dialect_, id);
+    }
+
+    template <class T>
+    std::vector<T> all() {
+        return detail::all_impl<T>(*lease_, *dialect_);
+    }
+
+    template <class T>
+    void insert(T& entity) {
+        detail::insert_impl<T>(*lease_, *dialect_, entity);
+    }
+
+    template <class T>
+    std::size_t update(const T& entity) {
+        return detail::update_impl<T>(*lease_, *dialect_, entity);
+    }
+
+    template <class T>
+    std::size_t remove(const id_type<T>& id) {
+        return detail::remove_impl<T>(*lease_, *dialect_, id);
+    }
+
+    template <class T>
+    void create_schema() {
+        detail::create_schema_impl<T>(*lease_, *dialect_);
+    }
+
+    template <class T>
+    void drop_schema() {
+        detail::drop_schema_impl<T>(*lease_, *dialect_);
+    }
+
+    /** @brief 低层查询：按 SELECT 列顺序映射实体 */
+    template <class T>
+    std::vector<T> fetch_rows(std::string_view sql,
+                              const std::vector<db_value>& params) {
+        return detail::fetch_rows_impl<T>(*lease_, sql, params);
+    }
+
+    /** @brief 原生 SQL：按结果列名映射实体（支持 alias/join） */
+    template <class T>
+    std::vector<T> query(std::string_view sql,
+                         const std::vector<db_value>& params = {}) {
+        return detail::query_impl<T>(*lease_, sql, params);
+    }
+
+    /** @brief 低层执行：DML/DDL，返回影响行数 */
+    std::size_t execute(std::string_view sql,
+                        const std::vector<db_value>& params) {
+        return detail::execute_impl(*lease_, sql, params);
+    }
+
+    template <class T>
+    select_builder<T, session> select() {
+        return select_builder<T, session>{*this};
+    }
+
+    template <class T>
+    update_builder<T, session> update() {
+        return update_builder<T, session>{*this};
+    }
+
+    template <class T>
+    delete_builder<T, session> remove() {
+        return delete_builder<T, session>{*this};
+    }
+
+private:
+    void rollback_noexcept() noexcept {
+        try {
+            if (lease_) lease_->execute("ROLLBACK");
+        } catch (...) {
+            // 析构不能抛；连接归还池后由池/数据库回收状态
+        }
+        finished_ = true;
+    }
+
+    connection_lease lease_;
+    const orm::dialect* dialect_ = nullptr;
+    bool finished_ = false;
+};
+
 /**
  * @brief 实体管理器
  *
@@ -37,13 +269,10 @@ export namespace orm {
  *   - 简单 CRUD：find / all / insert / update / remove
  *   - 建表/删表：create_schema / drop_schema（开发/测试）
  *   - 类型安全 DSL 入口：select / update / remove
- *   - 低层执行：fetch_rows / execute（DSL 与原生 SQL 用）
+ *   - 低层执行：fetch_rows / query / execute
+ *   - 事务：transaction(callback)
  *
- * 所有 SQL 都按 DataSource::dialect() 生成，因此同一个 EntityManager
- * 可以运行在 PostgreSQL / MySQL 等驱动之上。
- *
- * 第一版同步调用，每次操作从 DataSource 租借连接；
- * 事务 API 在后续阶段接入。
+ * 非事务操作每次从 DataSource 租借连接；事务内使用 session 固定连接。
  */
 class [[=Bean{}]] EntityManager {
 public:
@@ -54,116 +283,77 @@ public:
     const dialect& dialect() const { return ds_.dialect(); }
 
     /**
-     * @brief 按主键查询
+     * @brief 在单连接事务中执行 callback
      *
-     * SQL 由 dialect 生成（占位符/标识符引用与数据库一致）。
-     * 未命中返回 nullopt。
+     * 正常返回 → COMMIT；抛异常 → ROLLBACK 后重新抛出。
+     * callback 内的 CRUD/DSL/原生 SQL 必须使用传入的 session，
+     * 不要再用 EntityManager 借新连接（会造成事务外的第二次操作）。
      */
+    template <class F>
+    decltype(auto) transaction(F&& fn) {
+        auto lease = ds_.acquire();
+        lease->execute("BEGIN");
+        session tx(std::move(lease), dialect());
+        using R = std::invoke_result_t<F, session&>;
+        if constexpr (std::is_void_v<R>) {
+            std::invoke(std::forward<F>(fn), tx);
+            if (!tx.finished()) tx.commit();
+        } else {
+            R result = std::invoke(std::forward<F>(fn), tx);
+            if (!tx.finished()) tx.commit();
+            return result;
+        }
+    }
+
+    /** @brief 按主键查询；未命中返回 nullopt */
     template <class T>
     std::optional<T> find(const id_type<T>& id) {
-        const auto& d = dialect();
         auto lease = ds_.acquire();
-        auto stmt = lease->prepare(select_by_id_sql<T>(d));
-        stmt->bind(0, detail::to_db_value(id));
-        if (!stmt->next()) return std::nullopt;
-        return read_row<T>(*stmt);
+        return detail::find_impl<T>(*lease, dialect(), id);
     }
 
-    /** @brief 查询全表；第一版不提供分页，用 DSL 做 limit/offset */
+    /** @brief 查询全表 */
     template <class T>
     std::vector<T> all() {
-        const auto& d = dialect();
         auto lease = ds_.acquire();
-        auto stmt = lease->prepare(select_all_sql<T>(d));
-        std::vector<T> out;
-        while (stmt->next()) out.push_back(read_row<T>(*stmt));
-        return out;
+        return detail::all_impl<T>(*lease, dialect());
     }
 
-    /**
-     * @brief 插入实体
-     *
-     * 自增主键：
-     *   - 支持 RETURNING 的方言（PostgreSQL）：INSERT ... RETURNING id；
-     *   - 不支持的方言（MySQL）：INSERT 后读取 connection::last_insert_id()。
-     *
-     * 非自增主键：id 由调用方提供，参与 INSERT。
-     */
+    /** @brief 插入实体；自增 id 按方言回填 */
     template <class T>
     void insert(T& entity) {
-        const auto& d = dialect();
-        const auto& meta = entity_meta_v<T>;
         auto lease = ds_.acquire();
-        auto stmt = lease->prepare(insert_sql<T>(d));
-        auto values = insert_values(entity);
-        for (std::size_t i = 0; i < values.size(); ++i)
-            stmt->bind(i, values[i]);
-
-        if (!meta.id_generated) {
-            (void)stmt->next();
-            return;
-        }
-
-        auto& id = entity.[:nth_member<T, meta.id_index>():];
-        if (d.supports_returning()) {
-            if (!stmt->next())
-                throw error("cboot.orm: INSERT RETURNING produced no row");
-            detail::read_scalar(*stmt, 0, id);
-            return;
-        }
-
-        (void)stmt->next();
-        const std::int64_t generated = lease->last_insert_id();
-        id = static_cast<std::remove_cvref_t<decltype(id)>>(generated);
+        detail::insert_impl<T>(*lease, dialect(), entity);
     }
 
-    /**
-     * @brief 按主键更新实体
-     *
-     * 只更新非 id 列；WHERE 使用 id。
-     * 返回影响行数（0 表示主键不存在）。
-     */
+    /** @brief 按主键更新；返回影响行数 */
     template <class T>
     std::size_t update(const T& entity) {
-        const auto& d = dialect();
         auto lease = ds_.acquire();
-        auto stmt = lease->prepare(update_sql<T>(d));
-        auto values = update_values(entity);
-        for (std::size_t i = 0; i < values.size(); ++i)
-            stmt->bind(i, values[i]);
-        (void)stmt->next();
-        return stmt->affected_rows();
+        return detail::update_impl<T>(*lease, dialect(), entity);
     }
 
     /** @brief 按主键删除；返回影响行数 */
     template <class T>
     std::size_t remove(const id_type<T>& id) {
-        const auto& d = dialect();
         auto lease = ds_.acquire();
-        auto stmt = lease->prepare(delete_sql<T>(d));
-        stmt->bind(0, detail::to_db_value(id));
-        (void)stmt->next();
-        return stmt->affected_rows();
+        return detail::remove_impl<T>(*lease, dialect(), id);
     }
 
-    /** @brief 按实体元数据建表（IF NOT EXISTS，开发/测试用） */
     template <class T>
     void create_schema() {
-        const auto& d = dialect();
         auto lease = ds_.acquire();
-        lease->execute(create_table_sql<T>(d));
+        detail::create_schema_impl<T>(*lease, dialect());
     }
 
-    /** @brief 删除实体表（IF EXISTS，开发/测试用） */
     template <class T>
     void drop_schema() {
-        const auto& d = dialect();
         auto lease = ds_.acquire();
-        lease->execute(drop_table_sql<T>(d));
+        detail::drop_schema_impl<T>(*lease, dialect());
     }
 
     /**
-     * @brief 低层查询：执行 SQL 并按实体映射行
+     * @brief 低层查询：按 SELECT 列顺序映射实体
      *
      * 给 DSL 和原生 SQL 逃生口使用；参数顺序必须与 SQL 占位符对应。
      */
@@ -171,27 +361,26 @@ public:
     std::vector<T> fetch_rows(std::string_view sql,
                               const std::vector<db_value>& params) {
         auto lease = ds_.acquire();
-        auto stmt = lease->prepare(sql);
-        for (std::size_t i = 0; i < params.size(); ++i)
-            stmt->bind(i, params[i]);
-        std::vector<T> out;
-        while (stmt->next()) out.push_back(read_row<T>(*stmt));
-        return out;
+        return detail::fetch_rows_impl<T>(*lease, sql, params);
     }
 
     /**
-     * @brief 低层执行：DML/DDL，返回影响行数
+     * @brief 原生 SQL：按结果列名映射实体（支持 alias/join）
      *
-     * 给 DSL 和原生 SQL 逃生口使用；不负责事务。
+     * 列名与实体 Column 元数据匹配；缺列抛 orm::error。
      */
+    template <class T>
+    std::vector<T> query(std::string_view sql,
+                         const std::vector<db_value>& params = {}) {
+        auto lease = ds_.acquire();
+        return detail::query_impl<T>(*lease, sql, params);
+    }
+
+    /** @brief 低层执行：DML/DDL，返回影响行数 */
     std::size_t execute(std::string_view sql,
                         const std::vector<db_value>& params) {
         auto lease = ds_.acquire();
-        auto stmt = lease->prepare(sql);
-        for (std::size_t i = 0; i < params.size(); ++i)
-            stmt->bind(i, params[i]);
-        (void)stmt->next();
-        return stmt->affected_rows();
+        return detail::execute_impl(*lease, sql, params);
     }
 
     /** @brief DSL：单表 SELECT */
@@ -221,9 +410,7 @@ private:
 /**
  * @brief ORM 通用契约组件描述符
  *
- * 只贡献 EntityManager；具体 DataSource 必须由驱动组件提供：
- *   applications: components = type_list<postgres_component>;
- * 或 components = type_list<mysql_component>;
+ * 只贡献 EntityManager；具体 DataSource 必须由驱动组件提供。
  */
 export struct orm_component {
     static constexpr bean_name name{"orm"};

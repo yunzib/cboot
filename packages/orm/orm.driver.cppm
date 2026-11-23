@@ -107,6 +107,12 @@ public:
     virtual double get_double(std::size_t column) = 0;
     virtual std::string_view get_text(std::size_t column) = 0;
 
+    /** @brief 结果集列数（无结果集返回 0） */
+    virtual std::size_t column_count() const = 0;
+
+    /** @brief 第 column 列的名字；无结果集返回空 */
+    virtual std::string_view column_name(std::size_t column) const = 0;
+
     /** @brief DML 影响行数（无则 0） */
     virtual std::size_t affected_rows() const = 0;
 };

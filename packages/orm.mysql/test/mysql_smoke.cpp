@@ -170,6 +170,40 @@ int main() {
         if (!updated || updated->name != "bob"
             || updated->email != "bob@example.com") return 20;
 
+        // 事务：异常回滚 / 正常提交
+        MysqlUser rolled{.name = "rolled", .active = true};
+        try {
+            db.transaction([&](orm::session& tx) {
+                tx.insert(rolled);
+                throw std::runtime_error("rollback");
+            });
+        } catch (const std::runtime_error&) {}
+        if (rolled.id > 0 && db.find<MysqlUser>(rolled.id).has_value()) return 25;
+
+        // 显式 rollback：callback 正常返回也不提交
+        MysqlUser manual{.name = "manual", .active = true};
+        db.transaction([&](orm::session& tx) {
+            tx.insert(manual);
+            tx.rollback();
+        });
+        if (manual.id > 0 && db.find<MysqlUser>(manual.id).has_value()) return 28;
+
+        MysqlUser committed{.name = "committed", .active = true};
+        db.transaction([&](orm::session& tx) { tx.insert(committed); });
+        if (!db.find<MysqlUser>(committed.id).has_value()) return 26;
+        db.remove<MysqlUser>(committed.id);
+
+        // 原生 SQL：按结果列名映射（故意打乱列顺序）
+        std::string query_sql =
+            "SELECT " + d.quote_identifier("active") + ","
+            + d.quote_identifier("email") + ","
+            + d.quote_identifier("display_name") + ","
+            + d.quote_identifier("id") + " FROM "
+            + d.quote_identifier("cboot_orm_mysql_smoke_users")
+            + " WHERE " + d.quote_identifier("id") + " = " + d.placeholder(1);
+        auto named = db.query<MysqlUser>(query_sql, {std::int64_t(u.id)});
+        if (named.size() != 1 || named.front().name != "bob") return 27;
+
         if (db.remove<MysqlUser>(u.id) != 1) return 21;
         if (db.find<MysqlUser>(u.id).has_value()) return 22;
 

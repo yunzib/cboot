@@ -165,6 +165,18 @@ public:
         return {p, std::size_t(n)};
     }
 
+    std::size_t column_count() const override {
+        return result_ ? std::size_t(mysql_num_fields(result_)) : 0;
+    }
+
+    std::string_view column_name(std::size_t column) const override {
+        if (!result_ || column >= std::size_t(mysql_num_fields(result_)))
+            return {};
+        const MYSQL_FIELD* fields = mysql_fetch_fields(result_);
+        return fields && fields[column].name
+            ? std::string_view(fields[column].name) : std::string_view{};
+    }
+
     std::size_t affected_rows() const override { return affected_rows_; }
 
 private:

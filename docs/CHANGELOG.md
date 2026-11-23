@@ -13,6 +13,8 @@
 - 认证组件：`cboot.auth` 登录态（opaque token、AuthService、
   MemoryTokenStore、路由策略、认证事件）；`cboot.jwt` 独立提供
   HS256/RS256 校验。
+- ORM 事务 `EntityManager::transaction` + 固定连接 `session`；
+  原生 SQL `query<T>` 按结果列名映射，驱动 statement 暴露列元数据。
 
 ### 重构
 - ORM 拆分为通用层 `cboot.orm` 与驱动 `cboot.orm.postgres` /

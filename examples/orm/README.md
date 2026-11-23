@@ -125,7 +125,20 @@ curl http://127.0.0.1:8080/api/orm/users
 
 # 删除
 curl -X DELETE http://127.0.0.1:8080/api/orm/users/1
+
+# 事务：两条都成功才提交
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"users":[{"name":"bob"},{"name":"carol"}]}' \
+  http://127.0.0.1:8080/api/orm/users/batch
+
+# 事务失败：第二条 name 为空 → 整体回滚，返回 400
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"users":[{"name":"dave"},{"name":""}]}' \
+  http://127.0.0.1:8080/api/orm/users/batch
 ```
+
+批量接口在 `transaction` 内插入；任意一条失败会抛异常，事务自动
+`ROLLBACK`，外层 `catch` 返回 400。失败请求不会留下部分数据。
 
 ## 7. 配置键
 

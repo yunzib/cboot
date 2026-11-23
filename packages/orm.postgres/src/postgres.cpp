@@ -111,6 +111,17 @@ public:
         return {p, std::size_t(n)};
     }
 
+    std::size_t column_count() const override {
+        return result_ ? std::size_t(PQnfields(result_)) : 0;
+    }
+
+    std::string_view column_name(std::size_t column) const override {
+        if (!result_ || column >= std::size_t(PQnfields(result_)))
+            return {};
+        const char* name = PQfname(result_, int(column));
+        return name ? std::string_view(name) : std::string_view{};
+    }
+
     std::size_t affected_rows() const override {
         if (!result_) return 0;
         const char* s = PQcmdTuples(result_);

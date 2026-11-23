@@ -36,7 +36,7 @@
   首个组件 `cboot.schedule`。
 - **定时**：`[[=Scheduled{...}]]` 固定延迟 / 5/6 段 cron，单调度线程、异常隔离、停机取消。
 - **ORM（可选组件）**：通用类型安全 ORM + PostgreSQL / MySQL 驱动，
-  实体元数据、CRUD、查询 DSL。
+  实体元数据、CRUD、查询 DSL、事务、原生 SQL 列名映射。
 - **运维**：内建 `GET /health`（200/503 + JSON）、`GET /beans`（仅 dev）。
 - **传输**：threads / IOCP / epoll；万级连接、背压 503、handler 超时 504、优雅停机。
 - **协程**：`task<T>` / `sync_wait`；handler 可返回 `task<Response>`。

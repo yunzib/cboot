@@ -205,21 +205,26 @@ inline void read_scalar(statement& st, std::size_t col, M& out) {
 }
 
 template <class T, std::size_t I>
-inline void read_member(statement& st, T& out) {
+inline void read_member_at(statement& st, std::size_t col, T& out) {
     using M = member_type_t<T, I>;
     auto& member = out.[:nth_member<T, I>():];
     if constexpr (is_optional_v<M>) {
-        if (st.is_null(I)) member.reset();
+        if (st.is_null(col)) member.reset();
         else {
             typename M::value_type v{};
-            read_scalar(st, I, v);
+            read_scalar(st, col, v);
             member = std::move(v);
         }
     } else {
-        if (st.is_null(I))
+        if (st.is_null(col))
             throw error("cboot.orm: unexpected NULL column");
-        read_scalar(st, I, member);
+        read_scalar(st, col, member);
     }
+}
+
+template <class T, std::size_t I>
+inline void read_member(statement& st, T& out) {
+    read_member_at<T, I>(st, I, out);
 }
 
 } // namespace detail
@@ -312,6 +317,50 @@ inline T read_row(statement& st) {
     [&]<std::size_t... I>(std::index_sequence<I...>) {
         (detail::read_member<T, I>(st, out), ...);
     }(std::make_index_sequence<member_count<T>()>{});
+    return out;
+}
+
+/**
+ * @brief 按列名映射结果集 → T
+ *
+ * 第一行到达后读取结果列名，按实体 Column 元数据建立映射。
+ * 适合 join/alias 后的原生 SQL；缺列直接抛 orm::error。
+ * 空结果集直接返回空 vector（不检查列名）。
+ */
+template <class T>
+inline std::vector<T> fetch_rows_named(statement& st) {
+    std::vector<T> out;
+    if (!st.next()) return out;
+
+    const std::size_t columns = st.column_count();
+    std::vector<std::string_view> names;
+    names.reserve(columns);
+    for (std::size_t i = 0; i < columns; ++i)
+        names.push_back(st.column_name(i));
+
+    std::array<std::size_t, member_count<T>()> mapping{};
+    [&]<std::size_t... I>(std::index_sequence<I...>) {
+        ([&] {
+            const auto want = entity_meta_v<T>.columns[I].view();
+            for (std::size_t j = 0; j < names.size(); ++j) {
+                if (names[j] == want) {
+                    mapping[I] = j;
+                    return;
+                }
+            }
+            throw error("cboot.orm: query missing column '"
+                        + std::string(want) + "'");
+        }(), ...);
+    }(std::make_index_sequence<member_count<T>()>{});
+
+    do {
+        T row{};
+        [&]<std::size_t... I>(std::index_sequence<I...>) {
+            (detail::read_member_at<T, I>(st, mapping[I], row), ...);
+        }(std::make_index_sequence<member_count<T>()>{});
+        out.push_back(std::move(row));
+    } while (st.next());
+
     return out;
 }
 

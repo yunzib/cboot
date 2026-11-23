@@ -25,6 +25,47 @@ struct [[=orm::Table{.name = "cboot_orm_smoke_ids"}]] IdOnly {
     [[=orm::Id{.generated = true}]] std::int64_t id{};
 };
 
+
+/** @brief 无数据库的 statement 桩：验证按列名映射 */
+class FakeStatement final : public orm::statement {
+public:
+    FakeStatement(std::vector<std::string> names,
+                  std::vector<std::vector<std::optional<std::string>>> rows)
+        : names_(std::move(names)), rows_(std::move(rows)) {}
+
+    void bind(std::size_t, const orm::db_value&) override {}
+    bool next() override { return ++row_ < rows_.size(); }
+    bool is_null(std::size_t col) override {
+        return rows_[row_][col] == std::nullopt;
+    }
+    std::int64_t get_int(std::size_t col) override {
+        std::int64_t v{};
+        auto s = get_text(col);
+        std::from_chars(s.data(), s.data() + s.size(), v);
+        return v;
+    }
+    double get_double(std::size_t col) override {
+        double v{};
+        auto s = get_text(col);
+        std::from_chars(s.data(), s.data() + s.size(), v);
+        return v;
+    }
+    std::string_view get_text(std::size_t col) override {
+        const auto& v = rows_[row_][col];
+        return v ? std::string_view(*v) : std::string_view{};
+    }
+    std::size_t column_count() const override { return names_.size(); }
+    std::string_view column_name(std::size_t col) const override {
+        return names_[col];
+    }
+    std::size_t affected_rows() const override { return 0; }
+
+private:
+    std::vector<std::string> names_;
+    std::vector<std::vector<std::optional<std::string>>> rows_;
+    std::ptrdiff_t row_ = -1;
+};
+
 /** @brief 测试用 PostgreSQL 风格方言；不依赖具体驱动包 */
 struct TestDialect final : orm::dialect {
     std::string quote_identifier(std::string_view name) const override {
@@ -139,6 +180,23 @@ int main() {
 
     auto ilike_cond = orm::ilike(orm::col<^^User::name>(), "bob%");
     if (ilike_cond.render(d).sql != R"("display_name" ILIKE $1)") return 22;
+
+    // 原生 SQL：按列名映射，列顺序故意打乱
+    FakeStatement stmt(
+        {"active", "email", "display_name", "id"},
+        {{{"1"}, {std::nullopt}, {"alice"}, {"42"}}});
+    auto named = orm::fetch_rows_named<User>(stmt);
+    if (named.size() != 1 || named.front().id != 42
+        || named.front().name != "alice" || !named.front().active
+        || named.front().email.has_value())
+        return 24;
+
+    FakeStatement missing({"id", "display_name"},
+                          {{{"1"}, {"alice"}}});
+    try {
+        (void)orm::fetch_rows_named<User>(missing);
+        return 25;
+    } catch (const orm::error&) {}
 
     std::println("ORM GENERIC SMOKE: PASS");
     return 0;

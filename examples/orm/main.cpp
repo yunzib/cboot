@@ -34,6 +34,11 @@ struct CreateUser {
     bool active{true};
 };
 
+/** @brief 批量创建 body：用于演示事务失败回滚 */
+struct BatchCreate {
+    std::vector<CreateUser> users;
+};
+
 /**
  * @brief 启动建表
  *
@@ -86,6 +91,41 @@ public:
         Response r = json_response(user);
         r.status = 201;
         return r;
+    }
+
+    /**
+     * @brief POST /api/orm/users/batch
+     *
+     * 要么全部插入，要么全部回滚。任意 name 为空时抛异常，
+     * transaction 自动 ROLLBACK；外层 catch 返回 400。
+     */
+    [[=Post{"/api/orm/users/batch"}]]
+    Response create_batch(const BatchCreate& in) {
+        try {
+            auto created = db_.transaction([&](orm::session& tx) {
+                std::vector<User> out;
+                out.reserve(in.users.size());
+                for (const auto& item : in.users) {
+                    if (item.name.empty())
+                        throw orm::error("batch: name is required");
+
+                    User user{.name = item.name,
+                              .email = item.email,
+                              .active = item.active};
+                    tx.insert(user);
+                    out.push_back(std::move(user));
+                }
+                return out;
+            });
+            Response r = json_response(created);
+            r.status = 201;
+            return r;
+        } catch (const std::exception& e) {
+            Response r = Response::text(
+                std::string("batch rolled back: ") + e.what());
+            r.status = 400;
+            return r;
+        }
     }
 
     /** @brief DELETE /api/orm/users/{id} */

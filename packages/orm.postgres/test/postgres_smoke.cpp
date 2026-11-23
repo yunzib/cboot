@@ -142,6 +142,41 @@ int main() {
         if (!updated || updated->name != "bob"
             || updated->email != "bob@example.com") return 15;
 
+        // 事务：异常回滚 / 正常提交
+        User rolled{.name = "rolled", .active = true};
+        try {
+            db.transaction([&](orm::session& tx) {
+                tx.insert(rolled);
+                throw std::runtime_error("rollback");
+            });
+        } catch (const std::runtime_error&) {}
+        if (rolled.id > 0 && db.find<User>(rolled.id).has_value()) return 24;
+
+        // 显式 rollback：callback 正常返回也不提交
+        User manual{.name = "manual", .active = true};
+        db.transaction([&](orm::session& tx) {
+            tx.insert(manual);
+            tx.rollback();
+        });
+        if (manual.id > 0 && db.find<User>(manual.id).has_value()) return 27;
+
+        User committed{.name = "committed", .active = true};
+        db.transaction([&](orm::session& tx) { tx.insert(committed); });
+        if (!db.find<User>(committed.id).has_value()) return 25;
+        db.remove<User>(committed.id);
+
+        // 原生 SQL：按结果列名映射（故意打乱列顺序）
+        std::string query_sql =
+            "SELECT " + d.quote_identifier("active") + ","
+            + d.quote_identifier("email") + ","
+            + d.quote_identifier("display_name") + ","
+            + d.quote_identifier("id") + " FROM "
+            + d.quote_identifier("public") + "."
+            + d.quote_identifier("cboot_orm_smoke_users")
+            + " WHERE " + d.quote_identifier("id") + " = " + d.placeholder(1);
+        auto named = db.query<User>(query_sql, {std::int64_t(u.id)});
+        if (named.size() != 1 || named.front().name != "bob") return 26;
+
         if (db.remove<User>(u.id) != 1) return 16;
         if (db.find<User>(u.id).has_value()) return 17;
 
