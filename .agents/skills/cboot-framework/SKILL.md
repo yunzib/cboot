@@ -1,11 +1,11 @@
 ---
 name: cboot-framework
-description: 在 cboot 仓库里开发或修改基于 C++26 静态反射的应用框架代码。当用户要新增 Bean、控制器、REST 路由、配置绑定、切面、协程 handler，排查编译期依赖注入/注解/模块错误，或改动 packages/、cmake/、examples/ 时使用；包含最小应用、注解与 DI 规则、路由参数协议、配置键、包/CMake 约定、构建测试命令，以及 GCC 16 反射/模块的已知约束。
+description: 在 cboot-framework 里开发或修改基于 C++26 静态反射的应用框架代码。当用户要新增 Bean、控制器、REST 路由、配置绑定、切面、协程 handler，排查编译期依赖注入/注解/模块错误，或改动 packages/、cmake/、examples/ 时使用；包含最小应用、注解与 DI 规则、路由参数协议、配置键、包/CMake 约定、构建测试命令，以及 GCC 16 反射/模块的已知约束。
 ---
 
-# cboot 框架开发
+# cboot-framework 框架开发
 
-cboot 把 Spring 的运行时装配搬到编译期：注解在编译期被反射读取，依赖图、路由表、
+cboot-framework 把 Spring 的运行时装配搬到编译期：注解在编译期被反射读取，依赖图、路由表、
 配置绑定在启动前确定；运行时只做 I/O、解析和序列化。改动时优先保持这个边界，
 不要把注册/扫描/装配搬到运行期。
 
@@ -66,6 +66,7 @@ target_link_libraries(app PRIVATE cboot::app)   # 模块 provider 必须直接�
 ```cmake
 # packages/<pkg>/CMakeLists.txt
 cboot_package(<pkg>
+    VERSION ${CBOOT_VERSION}   # 基础包共享 SDK 版本，可省略
     TIER foundation
     MODULES <pkg>.cppm
     SOURCES src/<pkg>.cpp

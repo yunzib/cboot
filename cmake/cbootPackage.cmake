@@ -3,6 +3,7 @@
 #
 # 约定：
 #   - 每个包一个同名 target：cboot_<name>，别名 cboot::<name>
+#   - VERSION 默认取 CBOOT_VERSION/project VERSION；基础包共享 SDK 版本
 #   - 模块接口单元放包根目录，实现单元放 <package>/src/
 #   - 基础包统一导出到共享 CbootTargets，由根 CMake 一次 install(EXPORT)
 #   - 契约组件的独立导出见 cbootComponent.cmake
@@ -70,6 +71,20 @@ function(cboot_package name)
         "MODULES;SOURCES;DEPENDS;TEST_SOURCES"
         ${ARGN})
 
+    # 基础包共享 cboot SDK 版本；project(cboot VERSION ...) 是唯一来源。
+    # 允许包显式覆盖，但默认不再要求每个包重复写 0.1.0。
+    if(NOT ARG_VERSION)
+        if(DEFINED CBOOT_VERSION AND NOT CBOOT_VERSION STREQUAL "")
+            set(ARG_VERSION "${CBOOT_VERSION}")
+        elseif(PROJECT_VERSION)
+            set(ARG_VERSION "${PROJECT_VERSION}")
+        else()
+            message(FATAL_ERROR
+                "cboot_package(${name}): VERSION is required "
+                "(set CBOOT_VERSION or project VERSION)")
+        endif()
+    endif()
+
     # TIER 是声明式分类（文档/CI/诊断），不改变导出方式；
     # 基础包只能是 foundation/runtime/bootstrap。
     if(NOT ARG_TIER)
@@ -86,6 +101,12 @@ function(cboot_package name)
         SOURCES ${ARG_SOURCES}
         DEPENDS ${ARG_DEPENDS}
         TEST_SOURCES ${ARG_TEST_SOURCES})
+
+    # 供构建期查询；安装后的 cboot 包版本由 cbootConfigVersion.cmake 提供。
+    set_target_properties("cboot_${name}" PROPERTIES
+        VERSION "${ARG_VERSION}"
+        CBOOT_PACKAGE_VERSION "${ARG_VERSION}"
+        CBOOT_PACKAGE_TIER "${ARG_TIER}")
 
     install(TARGETS "cboot_${name}" EXPORT CbootTargets
         FILE_SET cxx_modules

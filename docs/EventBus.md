@@ -1,6 +1,6 @@
 # 事件总线
 
-cboot 的事件总线是**进程内、同步、编译期收集监听者**的事件机制。
+cboot-framework 的事件总线是**进程内、同步、编译期收集监听者**的事件机制。
 它不是消息队列：没有持久化、重试、削峰和跨进程投递。
 
 示例默认 `import cboot.app; import std;`（`event_publisher`、`aspect_chain`、

@@ -51,6 +51,7 @@ packages/<name>/
 ```cmake
 # packages/<name>/CMakeLists.txt
 cboot_package(<name>
+    VERSION ${CBOOT_VERSION}   # 基础包共享 SDK 版本；可省略，默认同上
     MODULES <module>.cppm
     SOURCES src/<module>.cpp
     DEPENDS <direct-package>...

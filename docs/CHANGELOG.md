@@ -10,6 +10,8 @@
 - ORM 拆分为通用层 `cboot.orm` 与驱动 `cboot.orm.postgres` /
   `cboot.orm.mysql`，通用层不再链接数据库客户端。
 - 组件构建支持 `PACKAGE_NAME`，驱动 target 与包名解耦。
+- 基础包 `cboot_package` 支持 `VERSION`（默认 `CBOOT_VERSION`），
+  安装配置显式导出 `cboot_VERSION` / `CBOOT_VERSION`。
 
 # 0.1.0 — 2026-11-22
 

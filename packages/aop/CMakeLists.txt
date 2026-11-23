@@ -2,6 +2,7 @@
 # cboot.aop — 编译期切面（纯模板，无运行时依赖）
 # ============================================================================
 cboot_package(aop
+    VERSION ${CBOOT_VERSION}
     TIER foundation
     MODULES aop.cppm
 )

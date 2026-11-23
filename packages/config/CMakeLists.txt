@@ -5,6 +5,7 @@
 # config.cppm 直接 import cboot.meta.reflect 与 cboot.json。
 # ============================================================================
 cboot_package(config
+    VERSION ${CBOOT_VERSION}
     TIER foundation
     MODULES config.cppm
     SOURCES src/config.cpp

@@ -5,6 +5,7 @@
 # app 是装配器/引导层，不包含契约组件；组件由应用 TU 的 components 选择。
 # ============================================================================
 cboot_package(app
+    VERSION ${CBOOT_VERSION}
     TIER bootstrap
     MODULES app.cppm
     SOURCES src/app.cpp

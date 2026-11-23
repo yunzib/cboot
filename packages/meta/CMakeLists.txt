@@ -5,6 +5,7 @@
 # type_list、type_of_t 桥接。后续所有包建立在本层之上。
 # ============================================================================
 cboot_package(meta
+    VERSION ${CBOOT_VERSION}
     TIER foundation
     MODULES reflect.cppm
 )

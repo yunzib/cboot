@@ -5,6 +5,7 @@
 # 平台：Windows（winsock2）；server.cppm 全局模块片段包含系统头
 # ============================================================================
 cboot_package(web
+    VERSION ${CBOOT_VERSION}
     TIER runtime
     MODULES http.cppm parser.cppm session.cppm routing.cppm server.cppm
     SOURCES src/routing.cpp src/server.cpp src/iocp.cpp src/epoll.cpp

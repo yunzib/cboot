@@ -13,6 +13,9 @@ set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "451f2fe2-a8a2-47c3-bc32-94786d8fc91b")
 # 版本语义自 v0.1.0 启动（Phase 0：骨架 + 反射基建 + 探针）
 project(cboot VERSION 0.1.0 LANGUAGES CXX)
 
+# 基础包共享同一个 SDK 版本；组件包可在 cboot_component(VERSION ...) 独立声明。
+set(CBOOT_VERSION "${PROJECT_VERSION}")
+
 # ── 工具链口径 ─────────────────────────────────────────────
 # 主链：GCC 16+（niXman MinGW）——唯一实现 P2996 反射的主流工具链（-freflection）
 # Clang/MSVC：主线无实现，Phase 0 不做承诺（宏轨出口后续按需引入）

@@ -3,6 +3,7 @@
 # 接口单元在包根，实现单元在 src/
 # ============================================================================
 cboot_package(json
+    VERSION ${CBOOT_VERSION}
     TIER foundation
     MODULES json.cppm
     SOURCES src/json.cpp

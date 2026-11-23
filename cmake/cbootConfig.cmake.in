@@ -8,6 +8,10 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     add_compile_options(-freflection)
 endif()
 
+# cboot 包版本；find_package 也会从 cbootConfigVersion.cmake 设置同名变量。
+set(cboot_VERSION "@PROJECT_VERSION@")
+set(CBOOT_VERSION "@PROJECT_VERSION@")
+
 # cboot 包配置：导入基础包模块化目标（cboot::meta / cboot::core /
 # cboot::json / cboot::config / cboot::aop / cboot::async /
 # cboot::web / cboot::app）。基础包在 packages/ 下同级构建，这里统一导出。

@@ -2,6 +2,7 @@
 # cboot.async — 协程基建（task<T> + 事件桥；纯模板，无运行时依赖）
 # ============================================================================
 cboot_package(async
+    VERSION ${CBOOT_VERSION}
     TIER foundation
     MODULES async.cppm
 )
