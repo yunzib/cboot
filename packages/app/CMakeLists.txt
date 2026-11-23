@@ -9,5 +9,5 @@ cboot_package(app
     TIER bootstrap
     MODULES app.cppm
     SOURCES src/app.cpp
-    DEPENDS aop config core json meta web
+    DEPENDS aop config core json meta validation web
 )

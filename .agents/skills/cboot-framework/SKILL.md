@@ -46,7 +46,7 @@ cmake --preset gcc-release && cmake --build --preset gcc-release
 ctest --test-dir build-release --output-on-failure
 ```
 
-改动框架后 Debug/Release 都要过 27 项 ctest（未找到 MySQL 客户端时 25 项）；
+改动框架后 Debug/Release 都要过 28 项 ctest（未找到 MySQL 客户端时 26 项）；
 负面用例（`negative_*.cpp`）是预期编译失败，不能“修好”。
 
 外部消费口径：
@@ -343,6 +343,21 @@ struct App : application<App> {
 - 集成测试：`CBOOT_TEST_PG_URL`、`CBOOT_TEST_MYSQL_DATABASE`（及可选
   `CBOOT_TEST_MYSQL_HOST/PORT/USER/PASSWORD`）；未设置时只跑单元测试。
 - 事务/session、原生 SQL 查询映射、repository 模板尚未接入。
+
+## DTO 校验（基础包 cboot.validation）
+
+- 不是契约组件，不参与 `components` 选择；`import cboot.app` 已 re-export。
+- 字段注解：`[[=validation::NotBlank{}]]`、`[[=validation::Range{.min,.max}]]`；
+  可带 `message` 自定义文案。
+- `validation::validate(dto)` 返回 `std::vector<field_error>`；
+  `validate_or_throw(dto)` 失败抛 `validation::invalid`。
+- HTTP body DTO 绑定后自动校验；失败与 JSON 语法/类型错误统一 400：
+  `{"errors":[{"field":"...","message":"..."}]}`。
+- 只支持顶层字段；NotBlank 限 `std::string`，Range 限整数/浮点；
+  不做嵌套递归、自定义 validator、正则或国际化。
+- 实现位置：`packages/validation/validation.cppm`；web 映射在
+  `packages/web/routing.cppm` / `src/routing.cpp`。
+- 测试：`validation_smoke`、`web_routing_smoke`。
 
 ## 健康检查
 

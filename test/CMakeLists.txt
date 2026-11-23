@@ -68,7 +68,7 @@ add_test(NAME async_smoke COMMAND cboot_async_smoke)
 
 # ── web：路由 / 服务器 / 后端 / 背压 / 超时 ────────────────────────────
 add_executable(cboot_web_routing_smoke web/web_routing_smoke.cpp)
-target_link_libraries(cboot_web_routing_smoke PRIVATE cboot_web)
+target_link_libraries(cboot_web_routing_smoke PRIVATE cboot_web cboot_validation)
 add_test(NAME web_routing_smoke COMMAND cboot_web_routing_smoke)
 
 add_executable(cboot_web_server_smoke web/web_server_smoke.cpp)

@@ -1,7 +1,13 @@
-// cboot.web.routing 实现单元 — 路由匹配与调度（含 URL 解码 / 405）
+/**
+ * @file routing.cpp
+ * @brief cboot.web.routing 实现单元 — 路由匹配、调度与请求体错误映射
+ *
+ * 负责 URL 解码、路径匹配、405 Allow、body DTO 校验错误转 400。
+ */
 module cboot.web.routing;
 
 import std;
+import cboot.validation;
 import cboot.web.http;
 
 namespace {
@@ -45,6 +51,24 @@ std::string join_segments(const segments& segs) {
         out.append(segs.items[i]);
     }
     return out;
+}
+
+/** @brief 校验失败 → 400 + {"errors":[{"field","message"}]} */
+Response validation_error_response(
+    const std::vector<validation::field_error>& errors) {
+    json::array items;
+    for (const auto& e : errors) {
+        json::object item;
+        item.emplace_back("field", json::value(e.field));
+        item.emplace_back("message", json::value(e.message));
+        items.emplace_back(json::value(std::move(item)));
+    }
+    json::object root;
+    root.emplace_back("errors", json::value(std::move(items)));
+
+    Response r = json_response(json::value(std::move(root)));
+    r.status = 400;
+    return r;
 }
 
 } // namespace
@@ -105,9 +129,11 @@ Response router::dispatch(std::string_view method, std::string_view target,
                                                     : std::string_view(decoded_path),
                             .query = query,
                             .body = body};
-                // handler 异常统一收敛为 500（dispatch 自身不抛）
+                // 请求体/字段校验失败 → 400；其余 handler 异常 → 500
                 try {
                     return r.h(req, pp);
+                } catch (const validation::invalid& e) {
+                    return validation_error_response(e.errors());
                 } catch (const std::exception& e) {
                     Response err = Response::text(std::string("500 ") + e.what());
                     err.status = 500;

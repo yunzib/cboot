@@ -10,7 +10,8 @@
 | 基础包 | `cboot_package(...)` | 否；随 `cboot` 一起安装导出 |
 | 契约组件 | `cboot_component(...)` | 是；独立包 `cboot.<name>` |
 
-基础包：`meta`、`json`、`config`、`core`、`aop`、`async`、`web`、`app`。
+基础包：`meta`、`json`、`config`、`core`、`aop`、`async`、`validation`、
+`web`、`app`。
 契约组件：`schedule`（固定延迟 / cron，贡献 hook，不贡献 bean）、
 `orm`（通用 EntityManager / DSL）、`orm.postgres`（PostgreSQL 驱动）、
 `orm.mysql`（MySQL 驱动）。驱动组件通过 `dependencies` 带入 `orm`。

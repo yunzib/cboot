@@ -23,6 +23,8 @@
   `[[=Value{"key"}]]` 直接注入标量；`[[=Profile{"dev"}]]` 按 profile 条件装配。
 - **JSON**：反射流式序列化，不建 value 树；支持 map/unordered_map、
   `json::codec<T>` 自定义类型；≤64 字节响应零堆分配。
+- **DTO 校验**：`[[=validation::NotBlank{}]]` / `[[=validation::Range{...}]]`，
+  body 绑定自动校验，失败返回 400 + 字段错误列表。
 - **AOP**：编译期切面链，零代理、零虚调用。
 - **事件**：`[[=EventListener{}]]` + `ctx.publish` / 注入 `event_publisher`，
   同步派发、顺序稳定、异常隔离，可接 `aspect_chain`。
@@ -158,7 +160,7 @@ cmake --build --preset gcc-release
 ## 4.2 测试
 
 ```bash
-ctest --preset gcc                  # 27 项（含 MySQL 驱动；未找到客户端时 25）
+ctest --preset gcc                  # 28 项（含 MySQL 驱动；未找到客户端时 26）
 ctest --test-dir build-release --output-on-failure
 ```
 
@@ -207,6 +209,7 @@ Release 构建、8 连接、16 万请求、0 失败：
 - [事件总线](docs/EventBus.md)
 - [契约组件](docs/契约组件.md)
 - [定时任务](docs/定时任务.md)
+- [DTO 校验](docs/校验.md)
 - [ORM 组件](docs/ORM.md)
 - [更新日志](docs/CHANGELOG.md)
 - [性能测试与 Java 对拍](docs/性能测试.md)
@@ -216,7 +219,7 @@ Release 构建、8 连接、16 万请求、0 失败：
 # 6. 目录
 
 ```
-packages/  同级包：meta/json/config/core/aop/async/web/app
+packages/  同级包：meta/json/config/core/aop/async/validation/web/app
            契约组件 schedule；ORM 通用层 orm + 驱动 orm.postgres / orm.mysql
 cmake/     包构建 helper（cboot_package / cboot_component）
 test/      按类别归类的冒烟测试；negative/ 负面用例、bench/ 压测

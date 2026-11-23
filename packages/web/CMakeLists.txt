@@ -2,6 +2,7 @@
 # cboot.web — 路由 + 嵌入式 HTTP 服务器
 #
 # 依赖：core（run 糖的 DI）/ json（body DTO）/ meta（反射基建）
+#       validation（body 字段校验）
 # 平台：Windows（winsock2）；server.cppm 全局模块片段包含系统头
 # ============================================================================
 cboot_package(web
@@ -9,7 +10,7 @@ cboot_package(web
     TIER runtime
     MODULES http.cppm parser.cppm session.cppm routing.cppm server.cppm
     SOURCES src/routing.cpp src/server.cpp src/iocp.cpp src/epoll.cpp
-    DEPENDS aop async core json meta
+    DEPENDS aop async core json meta validation
 )
 
 if(WIN32)

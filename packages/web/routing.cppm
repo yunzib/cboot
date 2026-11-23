@@ -5,6 +5,7 @@ import cboot.aop;            // call_info / aspect_chain（编译期切面）
 import cboot.async;          // task<Response> handler（协程请求路径）
 import cboot.json;
 import cboot.meta.reflect;    // members_of / annotation_of / type_of_t（全局工具）
+import cboot.validation;      // body DTO 字段校验
 import cboot.web.http;
 
 /**
@@ -156,7 +157,16 @@ auto make_arg(const Request& req, const std::vector<std::string_view>& pp) {
     if constexpr (pt == ^^Request) {
         return req;    // const Request& / Request（按值拷贝）皆可绑定
     } else if constexpr (std::is_aggregate_v<P> && !std::is_array_v<P>) {
-        return json::get_as<P>(json::parse(req.body));    // body DTO
+        // body DTO：JSON 解析/类型错误与字段校验失败都归入 400。
+        try {
+            P dto = json::get_as<P>(json::parse(req.body));
+            validation::validate_or_throw(dto);
+            return dto;
+        } catch (const validation::invalid&) {
+            throw;
+        } catch (const std::runtime_error& e) {
+            throw validation::invalid({{"body", e.what()}});
+        }
     } else {
         constexpr std::size_t slot = path_slot<Fn, J>();
         if constexpr (std::is_same_v<P, std::string>) {

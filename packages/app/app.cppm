@@ -11,6 +11,7 @@ export import cboot.core.annotations;   // Bean / Inject / Config / 生命周期
 export import cboot.core.context;       // context / context_for
 export import cboot.json;               // json::value / parse / from
 export import cboot.meta.reflect;       // for_each_member / type_list / type_of_t
+export import cboot.validation;         // NotBlank / Range / validate
 export import cboot.web.http;           // Get/Post/Put/Delete/Patch / Request / Response
 export import cboot.web.routing;        // router
 export import cboot.web.server;         // server

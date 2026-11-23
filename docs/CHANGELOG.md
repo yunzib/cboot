@@ -5,6 +5,9 @@
 ### 新增
 - 通用 ORM 方言抽象 `dialect` 与 MySQL 驱动 `cboot.orm.mysql`
   （`MysqlProps` / `MysqlDataSource` / `mysql_component`）。
+- DTO 校验基础包 `cboot.validation`：`NotBlank` / `Range` 注解、
+  `validate` / `validate_or_throw`；HTTP body 绑定失败返回 400 +
+  字段错误列表。
 
 ### 重构
 - ORM 拆分为通用层 `cboot.orm` 与驱动 `cboot.orm.postgres` /

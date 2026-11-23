@@ -14,6 +14,7 @@ add_subdirectory(config)
 add_subdirectory(core)
 add_subdirectory(aop)
 add_subdirectory(async)
+add_subdirectory(validation)
 add_subdirectory(web)
 add_subdirectory(app)
 

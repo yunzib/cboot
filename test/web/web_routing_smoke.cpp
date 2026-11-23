@@ -1,8 +1,13 @@
-// cboot.web 路由冒烟测试（纯逻辑，无 socket）
-// 验证：编译期路由表 / 路径参数（数值+字符串）/ body DTO / Request 参数
-//       query 解码 / URL 百分号解码 / PUT-DELETE-PATCH / 405+Allow / 响应头
+/**
+ * @file web_routing_smoke.cpp
+ * @brief cboot.web 路由冒烟测试（纯逻辑，无 socket）
+ *
+ * 验证：编译期路由表 / 路径参数 / body DTO / DTO 字段校验与 400 映射 /
+ *       query 解码 / URL 百分号解码 / PUT-DELETE-PATCH / 405+Allow / 响应头
+ */
 import cboot.async;
 import cboot.json;
+import cboot.validation;
 import cboot.web.http;
 import cboot.web.routing;
 import std;
@@ -10,6 +15,11 @@ import std;
 struct CreateUser {
     std::string name;
     int age{};
+};
+
+struct ValidatedUser {
+    [[=validation::NotBlank{}]] std::string name;
+    [[=validation::Range{.min = 18, .max = 120}]] int age{};
 };
 
 struct UserDto {
@@ -36,6 +46,11 @@ struct UserApi {
     [[=Post{"/users"}]]
     Response create_user(const CreateUser& dto) {
         return json_response(UserDto{.name = dto.name + "!", .age = dto.age});
+    }
+
+    [[=Post{"/validated"}]]
+    Response create_validated(const ValidatedUser& dto) {
+        return json_response(dto);
     }
 
     [[=Put{"/users/{id}"}]]
@@ -84,7 +99,7 @@ int main() {
     UserApi api;
     router r;
     r.mount(api);
-    if (r.size() != 10) return 1;
+    if (r.size() != 11) return 1;
 
     // ── 路径参数（数值）──
     auto g = r.dispatch("GET", "/users/42", "");
@@ -96,6 +111,26 @@ int main() {
     auto p = r.dispatch("POST", "/users", R"({"name":"bob","age":30})");
     auto v2 = json::parse(p.body);
     if (v2.find("name")->as_string() != "bob!" || v2.find("age")->as_int() != 30) return 3;
+
+    // ── body DTO 字段校验：合法 200 / 非法 400 + 错误列表 ──────────────
+    auto valid = r.dispatch("POST", "/validated", R"({"name":"alice","age":30})");
+    if (valid.status != 200) return 18;
+
+    auto invalid = r.dispatch("POST", "/validated", R"({"name":"  ","age":17})");
+    if (invalid.status != 400) return 19;
+    auto invalid_body = json::parse(invalid.body);
+    const json::value* errors = invalid_body.find("errors");
+    if (!errors || !errors->is_array() || errors->as_array().size() != 2)
+        return 20;
+    if (errors->as_array()[0].find("field")->as_string() != "name"
+        || errors->as_array()[1].find("field")->as_string() != "age")
+        return 21;
+
+    // JSON 语法错误 / 字段类型错误同样归入 400
+    if (r.dispatch("POST", "/validated", R"({"name":)").status != 400)
+        return 22;
+    if (r.dispatch("POST", "/validated", R"({"name":1,"age":30})").status != 400)
+        return 23;
 
     // ── PUT / DELETE / PATCH ──
     auto u = r.dispatch("PUT", "/users/5", R"({"name":"carl","age":9})");
