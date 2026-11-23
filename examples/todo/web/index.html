@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cboot 待办示例</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f1ea;
+    --card: #fffdf8;
+    --ink: #24211c;
+    --muted: #7a746a;
+    --line: #e3ddd1;
+    --accent: #2f6b4f;
+    --accent-ink: #ffffff;
+    --danger: #a33a2b;
+    --shadow: 0 18px 50px rgba(40, 34, 24, .12);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #171614;
+      --card: #201e1a;
+      --ink: #ece7dd;
+      --muted: #a29b8e;
+      --line: #35312a;
+      --accent: #6fb894;
+      --accent-ink: #102019;
+      --danger: #e07a68;
+      --shadow: 0 18px 50px rgba(0, 0, 0, .35);
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: grid;
+    place-items: start center;
+    padding: clamp(20px, 6vh, 64px) 16px;
+    background:
+      radial-gradient(circle at 15% 0%, rgba(47, 107, 79, .12), transparent 42%),
+      radial-gradient(circle at 90% 10%, rgba(190, 130, 70, .12), transparent 40%),
+      var(--bg);
+    color: var(--ink);
+    font: 16px/1.6 "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+
+  .card {
+    width: min(720px, 100%);
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    box-shadow: var(--shadow);
+    padding: clamp(22px, 4vw, 38px);
+  }
+
+  .card.login { width: min(420px, 100%); }
+
+  header { margin-bottom: 24px; }
+
+  .top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .eyebrow {
+    margin: 0 0 6px;
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+  }
+
+  h1 {
+    margin: 0;
+    font-size: clamp(26px, 4vw, 34px);
+    line-height: 1.2;
+    letter-spacing: -.02em;
+  }
+
+  .subtitle {
+    margin: 8px 0 0;
+    color: var(--muted);
+    font-size: 14px;
+  }
+
+  .subtitle strong { color: var(--ink); font-weight: 600; }
+
+  form { display: flex; gap: 10px; margin-bottom: 8px; }
+  form.stack { flex-direction: column; gap: 12px; margin-top: 22px; }
+
+  input[type="text"],
+  input[type="password"] {
+    flex: 1;
+    min-width: 0;
+    padding: 13px 15px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    outline: none;
+    transition: border-color .15s, box-shadow .15s;
+  }
+
+  input[type="text"]:focus,
+  input[type="password"]:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+
+  button {
+    border: 0;
+    border-radius: 12px;
+    padding: 13px 20px;
+    background: var(--accent);
+    color: var(--accent-ink);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform .1s, opacity .15s;
+  }
+
+  button:hover { opacity: .9; }
+  button:active { transform: translateY(1px); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+
+  button.ghost {
+    padding: 9px 14px;
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    font-size: 14px;
+    flex: none;
+  }
+
+  button.ghost:hover { color: var(--ink); border-color: var(--muted); }
+
+  .error {
+    margin: 0 0 8px;
+    padding: 10px 12px;
+    border-left: 3px solid var(--danger);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+    color: var(--danger);
+    font-size: 14px;
+  }
+
+  .hint {
+    margin: 18px 0 0;
+    color: var(--muted);
+    font-size: 12.5px;
+    text-align: center;
+  }
+
+  ul {
+    list-style: none;
+    margin: 18px 0 0;
+    padding: 0;
+    border-top: 1px solid var(--line);
+  }
+
+  li {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 2px;
+    border-bottom: 1px solid var(--line);
+    animation: rise .18s ease-out;
+  }
+
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: none; }
+  }
+
+  input[type="checkbox"] {
+    width: 19px;
+    height: 19px;
+    accent-color: var(--accent);
+    cursor: pointer;
+    flex: none;
+  }
+
+  .title {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  li.done .title {
+    color: var(--muted);
+    text-decoration: line-through;
+    text-decoration-thickness: 1px;
+  }
+
+  .remove {
+    flex: none;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font-size: 20px;
+    line-height: 1;
+    padding: 4px 8px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  .remove:hover {
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+  }
+
+  .empty {
+    margin: 26px 0 8px;
+    padding: 22px;
+    border: 1px dashed var(--line);
+    border-radius: 14px;
+    color: var(--muted);
+    text-align: center;
+    font-size: 14px;
+  }
+
+  footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    justify-content: space-between;
+    margin-top: 22px;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  footer strong { color: var(--ink); font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <!-- 登录 -->
+  <section id="login-view" class="card login">
+    <header>
+      <p class="eyebrow">cboot-framework · PostgreSQL</p>
+      <h1>登录</h1>
+      <p class="subtitle">示例账号 <strong>admin / admin123</strong></p>
+    </header>
+
+    <form id="login-form" class="stack" autocomplete="on">
+      <input id="username" name="username" type="text" placeholder="用户名" autocomplete="username" required>
+      <input id="password" name="password" type="password" placeholder="密码" autocomplete="current-password" required>
+      <button id="login-button" type="submit">登录</button>
+    </form>
+
+    <p id="login-error" class="error" role="alert" aria-live="polite" hidden></p>
+    <p class="hint">密码以 PBKDF2-HMAC-SHA256 哈希存储，登录态使用 opaque token。</p>
+  </section>
+
+  <!-- 待办 -->
+  <section id="app-view" class="card" hidden>
+    <header class="top">
+      <div>
+        <p class="eyebrow">cboot-framework · PostgreSQL</p>
+        <h1>待办清单</h1>
+        <p class="subtitle">当前用户：<strong id="who">—</strong></p>
+      </div>
+      <button id="logout" class="ghost" type="button">退出</button>
+    </header>
+
+    <form id="form" autocomplete="off">
+      <input id="title-input" type="text" maxlength="200" placeholder="要做什么？" aria-label="待办内容" required>
+      <button id="submit" type="submit">添加</button>
+    </form>
+
+    <p id="error" class="error" role="alert" aria-live="polite" hidden></p>
+
+    <ul id="list" aria-label="待办列表"></ul>
+    <p id="empty" class="empty" hidden>还没有待办，先添加一条。</p>
+
+    <footer>
+      <span id="stats">—</span>
+      <span>AuthGuard → Service → Repository → EntityManager</span>
+    </footer>
+  </section>
+</main>
+
+<script>
+  const TOKEN_KEY = "cboot_demo_token";
+  const $ = (id) => document.getElementById(id);
+
+  const loginView = $("login-view");
+  const appView = $("app-view");
+  const loginForm = $("login-form");
+  const loginButton = $("login-button");
+  const loginError = $("login-error");
+  const usernameInput = $("username");
+  const passwordInput = $("password");
+  const who = $("who");
+  const logoutButton = $("logout");
+  const form = $("form");
+  const titleInput = $("title-input");
+  const submitButton = $("submit");
+  const errorBox = $("error");
+  const list = $("list");
+  const empty = $("empty");
+  const stats = $("stats");
+
+  let token = localStorage.getItem(TOKEN_KEY);
+  let tasks = [];
+
+  class AuthError extends Error {}
+
+  class ApiError extends Error {
+    constructor(status, message) {
+      super(message);
+      this.status = status;
+    }
+  }
+
+  function showError(message) {
+    errorBox.textContent = message;
+    errorBox.hidden = !message;
+  }
+
+  function showLogin(message = "") {
+    loginView.hidden = false;
+    appView.hidden = true;
+    loginError.textContent = message;
+    loginError.hidden = !message;
+    usernameInput.focus();
+  }
+
+  function showApp(username) {
+    loginView.hidden = true;
+    appView.hidden = false;
+    who.textContent = username;
+    loginError.hidden = true;
+    titleInput.focus();
+  }
+
+  function clearSession() {
+    token = null;
+    localStorage.removeItem(TOKEN_KEY);
+  }
+
+  async function request(url, options = {}, useAuth = true) {
+    const headers = new Headers(options.headers || {});
+    if (useAuth && token) headers.set("Authorization", `Bearer ${token}`);
+
+    const response = await fetch(url, { ...options, headers });
+    if (useAuth && response.status === 401) {
+      clearSession();
+      showLogin("登录已过期，请重新登录");
+      throw new AuthError("unauthorized");
+    }
+    if (!response.ok) {
+      const text = await response.text();
+      throw new ApiError(response.status, text || `HTTP ${response.status}`);
+    }
+    if (response.status === 204) return null;
+    return response.json();
+  }
+
+  function toText(error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  function render() {
+    list.replaceChildren();
+
+    for (const task of tasks) {
+      const item = document.createElement("li");
+      item.className = task.done ? "done" : "";
+
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = Boolean(task.done);
+      checkbox.setAttribute("aria-label", `标记 ${task.title} 为已完成`);
+      checkbox.addEventListener("change", async () => {
+        checkbox.disabled = true;
+        try {
+          await request(`/api/tasks/${task.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ done: checkbox.checked }),
+          });
+          await load();
+        } catch (error) {
+          checkbox.checked = !checkbox.checked;
+          if (!(error instanceof AuthError)) showError(toText(error));
+        } finally {
+          checkbox.disabled = false;
+        }
+      });
+
+      const title = document.createElement("span");
+      title.className = "title";
+      title.textContent = task.title;
+
+      const remove = document.createElement("button");
+      remove.className = "remove";
+      remove.type = "button";
+      remove.textContent = "×";
+      remove.setAttribute("aria-label", `删除 ${task.title}`);
+      remove.addEventListener("click", async () => {
+        if (!confirm(`删除「${task.title}」？`)) return;
+        remove.disabled = true;
+        try {
+          await request(`/api/tasks/${task.id}`, { method: "DELETE" });
+          await load();
+        } catch (error) {
+          remove.disabled = false;
+          if (!(error instanceof AuthError)) showError(toText(error));
+        }
+      });
+
+      item.append(checkbox, title, remove);
+      list.append(item);
+    }
+
+    const remaining = tasks.filter((task) => !task.done).length;
+    stats.textContent = `${tasks.length} 项 · ${remaining} 项待完成`;
+    empty.hidden = tasks.length !== 0;
+  }
+
+  async function load() {
+    try {
+      tasks = await request("/api/tasks");
+      showError("");
+      render();
+    } catch (error) {
+      if (error instanceof AuthError) return;
+      showError(`加载失败：${toText(error)}`);
+    }
+  }
+
+  loginForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    loginButton.disabled = true;
+    loginError.hidden = true;
+    try {
+      const data = await request("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: usernameInput.value.trim(),
+          password: passwordInput.value,
+        }),
+      }, false);
+
+      token = data.token;
+      localStorage.setItem(TOKEN_KEY, token);
+      loginForm.reset();
+      showApp(data.username);
+      await load();
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        loginError.textContent = "用户名或密码错误";
+      } else if (error instanceof TypeError) {
+        loginError.textContent =
+          "无法连接服务器：请通过 http://127.0.0.1:8090/ 打开页面，不要直接打开 HTML 文件或使用其他端口";
+      } else {
+        loginError.textContent = `登录失败：${toText(error)}`;
+      }
+      loginError.hidden = false;
+    } finally {
+      loginButton.disabled = false;
+    }
+  });
+
+  logoutButton.addEventListener("click", async () => {
+    logoutButton.disabled = true;
+    try {
+      await request("/api/auth/logout", { method: "POST" });
+    } catch (error) {
+      // 忽略登出错误；本地会话已经清理
+    } finally {
+      clearSession();
+      showLogin("");
+      logoutButton.disabled = false;
+    }
+  });
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const title = titleInput.value.trim();
+    if (!title) return;
+
+    submitButton.disabled = true;
+    try {
+      await request("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+      titleInput.value = "";
+      titleInput.focus();
+      await load();
+    } catch (error) {
+      if (!(error instanceof AuthError))
+        showError(`添加失败：${toText(error)}`);
+    } finally {
+      submitButton.disabled = false;
+    }
+  });
+
+  async function boot() {
+    if (!token) {
+      showLogin("");
+      return;
+    }
+    try {
+      const me = await request("/api/auth/me");
+      showApp(me.username);
+      await load();
+    } catch (error) {
+      if (!(error instanceof AuthError)) {
+        clearSession();
+        showLogin("会话失效，请重新登录");
+      }
+    }
+  }
+
+  boot();
+</script>
+</body>
+</html>

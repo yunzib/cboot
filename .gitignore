@@ -5,3 +5,5 @@ compile_commands.json
 build-neg/
 docs/任务清单.md
 build-test/
+build-debug/
+build-rwdi/

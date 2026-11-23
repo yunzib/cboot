@@ -1,0 +1,29 @@
+{
+  "server": {
+    "port": 8090
+  },
+  "db": {
+    "url": "postgresql://127.0.0.1:5432/cboot_demo",
+    "user": "postgres",
+    "password": "${PGPASSWORD}",
+    "sslmode": "prefer",
+    "pool_size": 4,
+    "connect_timeout_s": 5,
+    "acquire_timeout_ms": 5000
+  },
+  "auth": {
+    "timeout_s": 7200,
+    "active_timeout_s": 1800,
+    "token_cookie": "cboot_token",
+    "public_paths": [
+      "POST:/api/auth/login",
+      "GET:/",
+      "GET:/index.html",
+      "GET:/health",
+      "OPTIONS:/**"
+    ],
+    "protected_paths": [
+      "/api/**"
+    ]
+  }
+}
