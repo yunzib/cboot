@@ -88,6 +88,40 @@ int main() {
     } catch (const std::runtime_error&) { threw = true; }
     if (!threw) return 7;
 
+    // ── 4.1 多键错误聚合 ──
+    try {
+        config::properties bad;
+        bad.set("db.port", "bad");
+        bad.set("db.pool.max", "also_bad");
+        (void)config::bind<Db>(bad, "db");
+        return 14;
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        if (msg.find("db.port") == std::string::npos
+            || msg.find("db.pool.max") == std::string::npos)
+            return 15;
+    }
+
+    // ── 4.2 CLI 解析 ──
+    char a0[] = "app";
+    char a1[] = "--config=prod.json";
+    char a2[] = "--server.port=9000";
+    char a3[] = "--db.host=db.prod";
+    char* av[] = {a0, a1, a2, a3};
+    auto cli = config::parse_command_line(4, av);
+    if (cli.config_path != "prod.json") return 16;
+    if (cli.values.get_raw("server.port").value_or("") != "9000") return 17;
+    if (cli.values.get_raw("db.host").value_or("") != "db.prod") return 18;
+
+    // ── 4.3 CB_ 环境变量映射 ──
+#if defined(_WIN32)
+    _putenv_s("CB_SERVER_PORT", "9010");
+#else
+    setenv("CB_SERVER_PORT", "9010", 1);
+#endif
+    auto env = config::environment("CB_");
+    if (env.get_raw("server.port").value_or("") != "9010") return 19;
+
     // ── 5. 容器注入：bean 构造器取 const config::properties& ──
     config::properties inj;
     inj.set("db.pool.size", "32");

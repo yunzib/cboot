@@ -142,9 +142,27 @@ struct [[=Config{"db"}]] DbProps {
 struct App : application<App> {          // 在 3.1 的 App 上增加配置路径
     static constexpr std::string_view config_path = "app.json";
 };
+
+int main(int argc, char** argv) {
+    return App{}.run(argc, argv);
+}
 ```
 
-端口优先级：`.port(n)` > `server.port` > `default_port` > 8080。
+```bash
+app --config=prod.json --server.port=9000
+app --db.host=db.prod
+```
+
+环境变量 `CB_` 前缀，`_` 转 `.`：`CB_SERVER_PORT=9000`、
+`CB_DB_HOST=db.prod`、`CB_CBOOT_PROFILES_ACTIVE=prod`。
+
+优先级：
+
+- 配置路径：`--config` > `.config(path)` > `config_path`
+- 键值：CLI `--key=value` > `CB_` 环境变量 > JSON 文件
+- 端口：`.port(n)` > 合并后的 `server.port` > `default_port` > 8080
+- 配置绑定失败会汇总全部错误键
+
 其他键：`server.io`（threads/iocp/epoll）、`server.workers`、`server.max_connections`、
 `server.handler_timeout_ms`、`server.send_timeout_ms`。
 

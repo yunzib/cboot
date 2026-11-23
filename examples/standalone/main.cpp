@@ -131,7 +131,5 @@ public:
 };
 
 int main(int argc, char** argv) {
-    const unsigned short port = argc > 1
-        ? static_cast<unsigned short>(std::atoi(argv[1])) : 0;
-    return ShopApp{}.port(port).run();
+    return ShopApp{}.run(argc, argv);
 }

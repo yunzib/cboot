@@ -96,7 +96,7 @@ Windows 下运行时需要 `libpq.dll` 在 PATH 或 exe 同目录；PostgreSQL �
 
 ```bash
 cd examples/orm
-./build/cboot_example_orm 8080
+./build/cboot_example_orm --server.port=8080
 ```
 
 启动时会：

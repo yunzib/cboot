@@ -17,6 +17,8 @@
   原生 SQL `query<T>` 按结果列名映射，驱动 statement 暴露列元数据。
 - 认证 RBAC：`RequireRole` / `RequireScope` 方法级/控制器级注解、
   `auth_policy_hook` 策略合并、403 与 `authorization_failed` 事件。
+- 配置源：CLI `--key=value` / `--config`、`CB_` 环境变量，优先级
+  CLI > env > JSON；配置绑定错误聚合全部非法键。
 - `cboot.auth.postgres`：`PgTokenStore`（表 `cboot_auth_sessions`）；
   auth 拆分核心 / memory / postgres TokenStore 组件。
 

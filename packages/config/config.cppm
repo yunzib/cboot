@@ -120,45 +120,106 @@ public:
     }
 
     auto& entries() const { return kv_; }
+    bool empty() const { return kv_.empty(); }
 
 private:
     std::vector<std::pair<std::string, std::string>> kv_;
 };
 
-/** @brief 递归绑定：prefix.name → 成员（嵌套聚合走子前缀） */
+namespace detail {
+
+/**
+ * @brief 递归收集绑定错误（嵌套聚合也继续收集，不首错中断）
+ */
 template <class T>
-void bind_to(T& out, const properties& p, std::string_view prefix) {
+void bind_collect(T& out, const properties& p, std::string_view prefix,
+                  std::vector<std::string>& errors) {
     for_each_member(out, [&](std::string_view name, auto& member) {
         using M = std::remove_reference_t<decltype(member)>;
-        std::string key = detail::join_key(prefix, name);
+        std::string key = join_key(prefix, name);
         if constexpr (std::is_aggregate_v<M> && !std::is_array_v<M>
-                      && !detail::is_specialization_v<std::vector, M>
-                      && !detail::is_specialization_v<std::optional, M>) {
-            bind_to(member, p, key);                        // 嵌套聚合 → 子前缀
-        } else if constexpr (detail::is_specialization_v<std::optional, M>) {
+                      && !is_specialization_v<std::vector, M>
+                      && !is_specialization_v<std::optional, M>) {
+            bind_collect(member, p, key, errors);
+        } else if constexpr (is_specialization_v<std::optional, M>) {
             if (auto raw = p.get_expanded(key)) {
-                typename M::value_type u{};
-                detail::convert(*raw, u, key);
-                member = std::move(u);
-            } else member.reset();                          // 缺键 → nullopt
-        } else if constexpr (detail::is_specialization_v<std::vector, M>) {
-            if (auto raw = p.get_expanded(key)) {           // 逗号形式优先
-                detail::convert(*raw, member, key);
-            } else {                                        // 索引键形式
+                try {
+                    typename M::value_type u{};
+                    convert(*raw, u, key);
+                    member = std::move(u);
+                } catch (const std::exception& e) {
+                    errors.push_back(key + ": " + e.what());
+                }
+            } else member.reset();
+        } else if constexpr (is_specialization_v<std::vector, M>) {
+            if (auto raw = p.get_expanded(key)) {
+                try {
+                    convert(*raw, member, key);
+                } catch (const std::exception& e) {
+                    errors.push_back(key + ": " + e.what());
+                }
+            } else {
                 member.clear();
                 for (std::size_t i = 0;; ++i) {
                     if (auto e = p.get_expanded(key + "." + std::to_string(i))) {
-                        typename M::value_type u{};
-                        detail::convert(*e, u, key);
-                        member.push_back(std::move(u));
+                        try {
+                            typename M::value_type u{};
+                            convert(*e, u, key);
+                            member.push_back(std::move(u));
+                        } catch (const std::exception& ex) {
+                            errors.push_back(key + "." + std::to_string(i)
+                                             + ": " + ex.what());
+                        }
                     } else break;
                 }
             }
         } else {
-            if (auto raw = p.get_expanded(key))
-                detail::convert(*raw, member, key);         // 缺键 → 保持默认
+            if (auto raw = p.get_expanded(key)) {
+                try {
+                    convert(*raw, member, key);
+                } catch (const std::exception& e) {
+                    errors.push_back(key + ": " + e.what());
+                }
+            }
         }
     });
+}
+
+} // namespace detail
+
+/**
+ * @brief 读取 CB_ 前缀环境变量并转成扁平键
+ *
+ * CB_SERVER_PORT=8080 → server.port=8080
+ * CB_CBOOT_PROFILES_ACTIVE=dev → cboot.profiles.active=dev
+ */
+properties environment(std::string_view prefix = "CB_");
+
+/** @brief 命令行解析结果：--config 路径 + --key=value 覆盖 */
+struct command_line {
+    properties values;
+    std::string config_path;
+};
+
+/**
+ * @brief 解析 --config[=path] 与 --key=value
+ *
+ * 非 -- 参数、缺值、空 key 抛 std::invalid_argument。
+ * --config 从 values 中移除，单独作为配置路径。
+ */
+command_line parse_command_line(int argc, char** argv);
+
+/** @brief 递归绑定：prefix.name → 成员（嵌套聚合走子前缀） */
+template <class T>
+void bind_to(T& out, const properties& p, std::string_view prefix) {
+    std::vector<std::string> errors;
+    detail::bind_collect(out, p, prefix, errors);
+    if (errors.empty()) return;
+
+    std::string msg = "cboot.config: binding failed:";
+    for (const auto& e : errors)
+        msg += "\n  - " + e;
+    throw std::runtime_error(msg);
 }
 
 /** @brief 绑定便捷形态：bind<DbProps>(props, "db") */

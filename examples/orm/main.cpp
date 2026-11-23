@@ -156,8 +156,5 @@ public:
 };
 
 int main(int argc, char** argv) {
-    // 不传端口时走 app.json / default_port；传 0 交给配置
-    const unsigned short port = argc > 1
-        ? static_cast<unsigned short>(std::atoi(argv[1])) : 0;
-    return OrmApp{}.port(port).run();
+    return OrmApp{}.run(argc, argv);
 }

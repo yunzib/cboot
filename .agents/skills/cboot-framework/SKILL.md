@@ -244,16 +244,19 @@ r.mount(api, RequestLog{});      // 切面链
 Response resp = r.dispatch("GET", "/users/42", "");
 ```
 
-## 配置（JSON，替代 YAML）
+## 配置（JSON + CLI + CB_ 环境变量）
 
-- 路径：`application<App>::config_path` 静态指定，或 `.config(path)` 运行时覆盖；
+- 路径：`--config` > `.config(path)` > `application<App>::config_path`。
+- 键值优先级：CLI `--key=value` > `CB_` 环境变量 > JSON 文件。
+  环境变量映射：`CB_SERVER_PORT` → `server.port`，`_` 转 `.`。
+- `main` 用 `App{}.run(argc, argv)` 启用 CLI/环境变量；
   端口优先级 `.port(n) > server.port > default_port > 8080`。
-  链式覆盖示例：`App{}.port(9000).config("prod.json").workers(8).run();`
+- 命令行示例：`app --config=prod.json --server.port=9000 --db.host=db.prod`。
 - 最小形态也可以 `int main() { return run(8080); }`；需要身份/配置载体时再上
   `application<App>`。
 - 嵌套对象展平为 `a.b.c`；数组为 `a.0`、`a.1`；`${ENV:default}` 读取时展开。
 - 绑定按成员名匹配键尾段；缺失键保留成员默认值；`optional` 缺键为 nullopt；
-  `vector` 支持逗号分隔或索引键。
+  `vector` 支持逗号分隔或索引键；非法键会聚合全部错误后一次抛出。
 - 构造器标量参数也可用 `[[=Value{"key"}]]` 注入（见 DI 一节），不必写配置结构体。
 - Profile 激活列表：`cboot.profiles.active`（逗号分隔，`[[=Profile{"name"}]]` 使用）。
 - 服务端键：`server.port`、`server.io`（threads/iocp/epoll）、`server.workers`、

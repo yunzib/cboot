@@ -719,19 +719,51 @@ public:
         return self();
     }
 
-    /** @brief 启动（阻塞直到停止；Ctrl+C/关闭事件 → 优雅停机） */
+    /** @brief 启动（无命令行参数） */
     int run() {
-        // 1) 配置加载（路径：运行时 > 静态；未指定则不加载）
-        std::string path = config_path_;
+        return run(0, nullptr);
+    }
+
+    /**
+     * @brief 启动并解析命令行/环境变量配置
+     *
+     * 优先级：
+     *   - 配置路径：--config > .config(path) > Derived::config_path
+     *   - 键值：CLI --key=value > CB_ 环境变量 > JSON 文件
+     *   - 端口：.port(n) > 合并后的 server.port > default_port > 8080
+     *   - worker：.workers(n) > 合并后的 server.workers
+     */
+    int run(int argc, char** argv) {
+        // 1) CLI 与 CB_ 环境变量
+        auto cli = config::parse_command_line(argc, argv);
+        auto env = config::environment("CB_");
+
+        // 2) 配置路径：CLI > 运行时 > 静态
+        std::string path = cli.config_path;
+        if (path.empty()) path = config_path_;
         if (path.empty()) {
             if constexpr (requires { Derived::config_path; })
                 path.assign(Derived::config_path);
         }
-        std::optional<config::properties> props;
-        if (!path.empty()) props = load_config_file(path);
-        const config::properties* cfg = props ? &*props : nullptr;
 
-        // 2) 端口：显式 > server.port > default_port > 8080
+        // 3) 合并：JSON → env → CLI
+        config::properties merged;
+        bool has_config = false;
+        if (!path.empty()) {
+            merged = load_config_file(path);
+            has_config = true;
+        }
+        if (!env.empty()) {
+            merged.overlay(env);
+            has_config = true;
+        }
+        if (!cli.values.empty()) {
+            merged.overlay(cli.values);
+            has_config = true;
+        }
+        const config::properties* cfg = has_config ? &merged : nullptr;
+
+        // 4) 端口：显式 > server.port > default_port > 8080
         unsigned short p = port_;
         if (p == 0 && cfg) {
             if (auto v = cfg->get_expanded("server.port"))
@@ -742,10 +774,10 @@ public:
             else p = 8080;
         }
 
-        // 3) 工作线程：显式 > server.workers > hardware_concurrency
+        // 5) 工作线程：显式 > server.workers > hardware_concurrency
         std::size_t w = workers_ != 0 ? workers_ : workers_from(cfg);
 
-        // 4) 后端与背压（配置内联解析；不引入非导出 helper，因模板在消费方实例化）
+        // 6) 后端与背压
         server_io io = server_io::threads;
         std::size_t max_conns = 0;
         if (cfg) {

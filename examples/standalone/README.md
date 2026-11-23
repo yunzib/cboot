@@ -34,8 +34,8 @@ cmake --build examples/standalone/build -j
 
 ```bash
 cd examples/standalone
-./build/cboot_example_standalone          # 8080
-./build/cboot_example_standalone 9000     # 覆盖端口
+./build/cboot_example_standalone                     # 8080
+./build/cboot_example_standalone --server.port=9000  # 覆盖端口
 ```
 
 Windows 下可执行文件为 `build/cboot_example_standalone.exe`。
