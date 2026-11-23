@@ -22,6 +22,7 @@ import std;
 export struct parsed_request {
     std::string_view method;      // 视图 → 解析器缓冲
     std::string_view target;      // 原始 target（路径 + query）
+    std::string_view headers;     // 原始 header 块（请求行之后、空行之前）
     std::string_view body;        // 原始 body
     std::size_t consumed = 0;     // 本请求占用字节数（处理完传给 consume）
     bool keep_alive = true;       // 连接复用意愿（版本 + Connection 头）
@@ -58,6 +59,10 @@ public:
 
         out.method = head.substr(0, sp1);
         out.target = head.substr(sp1 + 1, sp2 - sp1 - 1);
+        const std::size_t first_crlf = head.find("\r\n");
+        out.headers = first_crlf == std::string_view::npos
+            ? std::string_view{}
+            : head.substr(first_crlf + 2);
         out.body = std::string_view(buf_.data() + he + 4, cl);
         out.consumed = he + 4 + cl - pos_;
         // HTTP/1.1 默认 keep-alive；Connection 头显式给出时以其为准

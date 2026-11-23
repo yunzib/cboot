@@ -94,7 +94,7 @@ public:
             const auto t0 = std::chrono::steady_clock::now();
             Response resp;
             try {
-                resp = router_.dispatch(rq.method, rq.target, rq.body);
+                resp = router_.dispatch(rq.method, rq.target, rq.body, rq.headers);
             } catch (const std::exception& e) {
                 resp = http_make_error(500, std::string("500 ") + e.what());
             } catch (...) {

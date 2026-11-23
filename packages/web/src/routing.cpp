@@ -1,14 +1,16 @@
 /**
  * @file routing.cpp
- * @brief cboot.web.routing 实现单元 — 路由匹配、调度与请求体错误映射
+ * @brief cboot.web.routing 实现单元 — 路由匹配、middleware 链与请求错误映射
  *
- * 负责 URL 解码、路径匹配、405 Allow、body DTO 校验错误转 400。
+ * 负责 URL 解码、路径匹配、405 Allow、全局/路由级中间件执行，
+ * 以及 body DTO 校验错误到 400 的映射。
  */
 module cboot.web.routing;
 
 import std;
 import cboot.validation;
 import cboot.web.http;
+import cboot.web.middleware;
 
 namespace {
 
@@ -53,6 +55,23 @@ std::string join_segments(const segments& segs) {
     return out;
 }
 
+/** @brief 路径匹配（忽略方法）；命中时填充参数段视图 */
+bool path_matches(const std::vector<std::string>& pattern,
+                  const segments& target,
+                  std::vector<std::string_view>& pp) {
+    if (pattern.size() != target.count) return false;
+    std::vector<std::string_view> tmp;
+    for (std::size_t i = 0; i < pattern.size(); ++i) {
+        if (!pattern[i].empty() && pattern[i][0] == '{') {
+            tmp.push_back(target.items[i]);        // 参数段：按位收集
+        } else if (pattern[i] != target.items[i]) {
+            return false;
+        }
+    }
+    pp = std::move(tmp);
+    return true;
+}
+
 /** @brief 校验失败 → 400 + {"errors":[{"field","message"}]} */
 Response validation_error_response(
     const std::vector<validation::field_error>& errors) {
@@ -74,8 +93,11 @@ Response validation_error_response(
 } // namespace
 
 void router::add_route(http_method method, std::string_view pattern,
-                       detail::handler_fn h) {
-    route_item item{method, {}, std::move(h)};
+                       detail::handler_fn h, std::string bean,
+                       std::string handler,
+                       std::vector<std::string> middleware) {
+    route_item item{method, std::string(pattern), {}, std::move(h),
+                    std::move(bean), std::move(handler), std::move(middleware)};
     {
         std::string scratch;
         const segments segs = split_view(pattern, scratch);
@@ -85,25 +107,23 @@ void router::add_route(http_method method, std::string_view pattern,
     routes_.push_back(std::move(item));
 }
 
-/** @brief 路径匹配（忽略方法）；命中时填充参数段视图 */
-static bool path_matches(const std::vector<std::string>& pattern,
-                         const segments& target,
-                         std::vector<std::string_view>& pp) {
-    if (pattern.size() != target.count) return false;
-    std::vector<std::string_view> tmp;
-    for (std::size_t i = 0; i < pattern.size(); ++i) {
-        if (!pattern[i].empty() && pattern[i][0] == '{') {
-            tmp.push_back(target.items[i]);        // 参数段：按位收集
-        } else if (pattern[i] != target.items[i]) {
-            return false;
-        }
-    }
-    pp = std::move(tmp);
-    return true;
+void router::use(std::string name, int order, web::middleware_fn fn) {
+    if (!fn) throw std::invalid_argument("cboot.web: empty middleware");
+    middlewares_.push_back({std::move(name), order, std::move(fn)});
+    std::stable_sort(middlewares_.begin(), middlewares_.end(),
+        [](const middleware_entry& a, const middleware_entry& b) {
+            if (a.order != b.order) return a.order < b.order;
+            return a.name < b.name;
+        });
 }
 
 Response router::dispatch(std::string_view method, std::string_view target,
                           std::string_view body) const {
+    return dispatch(method, target, body, {});
+}
+
+Response router::dispatch(std::string_view method, std::string_view target,
+                          std::string_view body, std::string_view headers) const {
     // 方法解析（未知方法 → 405 并给 Allow）
     const std::optional<http_method> m = method_from_name(method);
     std::string_view path = target;
@@ -120,51 +140,68 @@ Response router::dispatch(std::string_view method, std::string_view target,
     if (!scratch.empty()) decoded_path = join_segments(segs);
     std::vector<std::string_view> pp;
 
+    // 先匹配路由，再让 middleware 看到 route_info；404/405 也走全局链。
+    const route_item* matched = nullptr;
     if (m) {
         for (const auto& r : routes_) {
             if (r.method != *m) continue;
             if (path_matches(r.segs, segs, pp)) {
-                Request req{.method = method,
-                            .path = scratch.empty() ? req_path
-                                                    : std::string_view(decoded_path),
-                            .query = query,
-                            .body = body};
-                // 请求体/字段校验失败 → 400；其余 handler 异常 → 500
-                try {
-                    return r.h(req, pp);
-                } catch (const validation::invalid& e) {
-                    return validation_error_response(e.errors());
-                } catch (const std::exception& e) {
-                    Response err = Response::text(std::string("500 ") + e.what());
-                    err.status = 500;
-                    return err;
-                } catch (...) {
-                    Response err = Response::text("500 internal error");
-                    err.status = 500;
-                    return err;
-                }
+                matched = &r;
+                break;
             }
         }
     }
 
-    // 路径命中但方法不匹配 → 405 + Allow（未知方法同样走此路径）
     std::string allow;
-    for (const auto& r : routes_) {
-        std::vector<std::string_view> ignored;
-        if (!path_matches(r.segs, segs, ignored)) continue;
-        std::string_view name = method_name(r.method);
-        if (allow.find(name) != std::string::npos) continue;
-        if (!allow.empty()) allow.append(", ");
-        allow.append(name);
-    }
-    if (!allow.empty()) {
-        Response r = Response::text("405 method not allowed");
-        r.status = 405;
-        r.header("Allow", std::move(allow));
-        return r;
+    if (!matched) {
+        for (const auto& r : routes_) {
+            std::vector<std::string_view> ignored;
+            if (!path_matches(r.segs, segs, ignored)) continue;
+            std::string_view name = method_name(r.method);
+            if (allow.find(name) != std::string::npos) continue;
+            if (!allow.empty()) allow.append(", ");
+            allow.append(name);
+        }
     }
 
-    Response not_found = Response::text("404 not found");
-    not_found.status = 404;
-    return not_found;
+    Request req{.method = method,
+                .path = scratch.empty() ? req_path : std::string_view(decoded_path),
+                .query = query,
+                .body = body,
+                .headers = headers};
+    web::request_context ctx(req);
+    web::route_info info{};
+    if (matched) {
+        info = web::route_info{
+            matched->method, matched->pattern, matched->bean, matched->handler,
+            std::span<const std::string>(matched->middleware)};
+        ctx.route = &info;
+    }
+
+    auto core = [&]() -> Response {
+        if (matched) return matched->h(ctx, pp);
+        if (!allow.empty()) {
+            Response r = Response::text("405 method not allowed");
+            r.status = 405;
+            r.header("Allow", std::move(allow));
+            return r;
+        }
+        Response not_found = Response::text("404 not found");
+        not_found.status = 404;
+        return not_found;
+    };
+
+    try {
+        return run_chain(0, ctx, core);
+    } catch (const validation::invalid& e) {
+        return validation_error_response(e.errors());
+    } catch (const std::exception& e) {
+        Response err = Response::text(std::string("500 ") + e.what());
+        err.status = 500;
+        return err;
+    } catch (...) {
+        Response err = Response::text("500 internal error");
+        err.status = 500;
+        return err;
+    }
 }

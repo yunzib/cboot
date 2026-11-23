@@ -39,6 +39,11 @@ struct UserApi {
     Response hdr() {
         return json_response(UserDto{.name = "h", .age = 0}).header("X-Trace", "t1");
     }
+
+    [[=Get{"/header"}]]
+    Response header(const Request& req) {
+        return json_response(std::string(req.header("X-Test").value_or("none")));
+    }
 };
 
 // ── 客户端：连接 + 按 Content-Length 收完整响应（支持 keep-alive）──
@@ -148,6 +153,11 @@ int main() {
     // ── 响应头 ──
     resp = one_shot(port, "GET /hdr HTTP/1.1\r\nHost: t\r\n\r\n");
     if (resp.find("X-Trace: t1") == std::string::npos) { srv.stop(); return 4; }
+
+    // ── 请求头透传（Authorization 等中间件依赖的路径）──
+    resp = one_shot(port,
+        "GET /header HTTP/1.1\r\nHost: t\r\nX-Test: hi\r\n\r\n");
+    if (body_of(resp) != R"("hi")") { srv.stop(); return 15; }
 
     // ── 405 + Allow ──
     resp = one_shot(port, "DELETE /users/1 HTTP/1.1\r\nHost: t\r\n\r\n");

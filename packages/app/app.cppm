@@ -13,6 +13,7 @@ export import cboot.json;               // json::value / parse / from
 export import cboot.meta.reflect;       // for_each_member / type_list / type_of_t
 export import cboot.validation;         // NotBlank / Range / validate
 export import cboot.web.http;           // Get/Post/Put/Delete/Patch / Request / Response
+export import cboot.web.middleware;     // Middleware / UseMiddleware / request_context
 export import cboot.web.routing;        // router
 export import cboot.web.server;         // server
 
@@ -190,6 +191,32 @@ consteval auto scan_visible_beans() {
 /** @brief 清单执行器：容器构造 → 组件 hooks → 挂载路由（可带切面）→ 服务 */
 template <class Beans, class Hooks = type_list<>>
 struct boot_runner;
+
+/** @brief 注册带 [[=web::Middleware]] 的 bean（支持全局 / 路由级） */
+template <class Ctx, class B, std::size_t I>
+void register_middleware(server& s, Ctx& ctx) {
+    constexpr auto mw = annotation_of<web::Middleware>(^^B);
+    if constexpr (mw.has_value()) {
+        static_assert(web::MiddlewareHandler<B>,
+                      "cboot.app: [[=Middleware]] bean must provide "
+                      "handle(request_context&, const next_fn&)");
+        if (ctx.template is_active<I>()) {
+            s.use(std::string(mw->name.view()), mw->order,
+                  [&ctx](web::request_context& rc, const web::next_fn& next) {
+                      return ctx.template get<B>().handle(rc, next);
+                  });
+        }
+    }
+}
+
+template <class Ctx, class... Bs>
+void register_middlewares(server& s, Ctx& ctx) {
+    [&]<std::size_t... I>(std::index_sequence<I...>) {
+        (register_middleware<Ctx, typename Ctx::template bean_type<I>, I>(s, ctx),
+         ...);
+    }(std::make_index_sequence<sizeof...(Bs)>{});
+}
+
 template <class... Ts, class... Hs>
 struct boot_runner<type_list<Ts...>, type_list<Hs...>> {
     template <class... As>
@@ -214,6 +241,7 @@ struct boot_runner<type_list<Ts...>, type_list<Hs...>> {
         }
         server s(sc);
         install_stop_handler(s);                  // Ctrl+C / 关闭 → 优雅停机
+        register_middlewares<context<Ts...>, Ts...>(s, ctx);
         health_endpoint<context<Ts...>> ops(ctx); // 内建 /health /beans
         s.mount(ops);
         // 按清单下标挂载：同基类的多个 bean 用类型 get 会歧义；

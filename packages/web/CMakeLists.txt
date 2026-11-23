@@ -8,7 +8,7 @@
 cboot_package(web
     VERSION ${CBOOT_VERSION}
     TIER runtime
-    MODULES http.cppm parser.cppm session.cppm routing.cppm server.cppm
+    MODULES http.cppm parser.cppm session.cppm middleware.cppm routing.cppm server.cppm
     SOURCES src/routing.cpp src/server.cpp src/iocp.cpp src/epoll.cpp
     DEPENDS aop async core json meta validation
 )

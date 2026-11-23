@@ -18,11 +18,12 @@ cboot-framework 把 Spring 的运行时装配搬到编译期：注解在编译�
   每个包有自己的 `CMakeLists.txt`；`packages/CMakeLists.txt` 只做同级
   `add_subdirectory` 注册，不写源文件/安装/测试细节。
 - 两类包：
-  - **基础包**：`meta/json/config/core/aop/async/web/app`，随 `cboot` 一起
-    安装导出，不参与应用 `components` 选择；
-  - **契约组件**：`schedule`、`orm`、`orm.postgres`、`orm.mysql` 等，
-    独立包 `cboot.<name>`；驱动组件可用 `PACKAGE_NAME` 解耦 target 名与包名
-    （`orm_postgres` / `cboot.orm.postgres`）。
+  - **基础包**：`meta/json/config/core/aop/async/validation/web/app`，随 `cboot`
+    一起安装导出，不参与应用 `components` 选择；
+  - **契约组件**：`schedule`、`orm`、`orm.postgres`、`orm.mysql`、
+    `jwt`、`auth` 等，独立包 `cboot.<name>`；驱动组件可用 `PACKAGE_NAME`
+    解耦 target 名与包名（`orm_postgres` / `cboot.orm.postgres`）。
+    `auth` 与 `jwt` 相互独立。
     描述符声明 `beans` / `dependencies` / `hooks`，由应用 `components` 选择。
     首个真实组件是 `cboot.schedule`（`Scheduled` 注解 + 调度 hook）。
 - `core` 是基础层，不是其他包的容器；依赖由 `target_link_libraries` 表达。
@@ -46,7 +47,8 @@ cmake --preset gcc-release && cmake --build --preset gcc-release
 ctest --test-dir build-release --output-on-failure
 ```
 
-改动框架后 Debug/Release 都要过 28 项 ctest（未找到 MySQL 客户端时 26 项）；
+改动框架后 Debug/Release 都要过 31 项 ctest（MySQL + OpenSSL 启用时；
+未找到对应客户端/库时 jwt/auth 或 MySQL 测试会跳过）；
 负面用例（`negative_*.cpp`）是预期编译失败，不能“修好”。
 
 外部消费口径：
@@ -358,6 +360,26 @@ struct App : application<App> {
 - 实现位置：`packages/validation/validation.cppm`；web 映射在
   `packages/web/routing.cppm` / `src/routing.cpp`。
 - 测试：`validation_smoke`、`web_routing_smoke`。
+
+## 中间件与认证（web middleware / cboot.jwt / cboot.auth）
+
+- 扩展点固定四类：`beans`、`hooks`、`middleware`、`aspects`。
+  middleware 是 Bean 角色，不新增组件描述符字段。
+- 中间件 Bean：`[[=web::Middleware{.name, .order}]]` + `handle(request_context&, next_fn)`。
+  `name` 为空 = 全局；非空 = 仅路由带 `[[=web::UseMiddleware{"name"}]]` 时执行。
+- `Request` 暴露原始 headers 与 `header("Authorization")`；`http_method`
+  包含 `OPTIONS`。`request_context` 有类型化属性槽（`put/find`）。
+- handler 可声明 `const web::request_context&` 参数；顺序：
+  parser → middleware → route → aspects → handler。
+- `cboot.jwt`：`JwtProps`（前缀 `jwt`）、`JwtVerifier`；HS256/RS256，
+  exp/nbf/iss/aud，OpenSSL 只在实现单元 include。测试/运行时需 OpenSSL。
+- `cboot.auth`：登录态 starter，不依赖 jwt。`AuthProps`（前缀 `auth`）+
+  `MemoryTokenStore` + `AuthService`（login/logout/kickout）+ 全局
+  `AuthGuard`；路由按 `public_paths` / `protected_paths` / `default_policy`
+  匹配；成功写入 `auth::session`，失败 401；发布
+  `authentication_succeeded/failed` 事件。不做密码校验/JWT 签发。
+- CMake：`cboot::jwt` / `cboot::auth`；auth 不依赖 OpenSSL，jwt 依赖 OpenSSL。
+- 测试：`web_middleware_smoke`、`jwt_smoke`、`auth_smoke`。
 
 ## 健康检查
 

@@ -8,6 +8,11 @@
 - DTO 校验基础包 `cboot.validation`：`NotBlank` / `Range` 注解、
   `validate` / `validate_or_throw`；HTTP body 绑定失败返回 400 +
   字段错误列表。
+- 请求中间件：`web::Middleware` Bean 角色、全局/路由级链、
+  `Request` headers、`request_context`、`OPTIONS`。
+- 认证组件：`cboot.auth` 登录态（opaque token、AuthService、
+  MemoryTokenStore、路由策略、认证事件）；`cboot.jwt` 独立提供
+  HS256/RS256 校验。
 
 ### 重构
 - ORM 拆分为通用层 `cboot.orm` 与驱动 `cboot.orm.postgres` /

@@ -16,16 +16,17 @@ export import cboot.json;
 
 // ==================== 方法 ====================
 
-export enum class http_method : std::uint8_t { get, post, put, del, patch };
+export enum class http_method : std::uint8_t { get, post, put, del, patch, options };
 
-/** @brief 方法名（"GET"/"POST"/"PUT"/"DELETE"/"PATCH"；未知返回空） */
+/** @brief 方法名（"GET"/"POST"/"PUT"/"DELETE"/"PATCH"/"OPTIONS"；未知返回空） */
 export constexpr std::string_view method_name(http_method m) {
     switch (m) {
-    case http_method::get:   return "GET";
-    case http_method::post:  return "POST";
-    case http_method::put:   return "PUT";
-    case http_method::del:   return "DELETE";
-    case http_method::patch: return "PATCH";
+    case http_method::get:     return "GET";
+    case http_method::post:    return "POST";
+    case http_method::put:     return "PUT";
+    case http_method::del:     return "DELETE";
+    case http_method::patch:   return "PATCH";
+    case http_method::options: return "OPTIONS";
     }
     return {};
 }
@@ -33,7 +34,8 @@ export constexpr std::string_view method_name(http_method m) {
 /** @brief 方法名 → 方法（大小写敏感；未知 nullopt） */
 export constexpr std::optional<http_method> method_from_name(std::string_view s) {
     for (http_method m : {http_method::get, http_method::post, http_method::put,
-                          http_method::del, http_method::patch})
+                          http_method::del, http_method::patch,
+                          http_method::options})
         if (method_name(m) == s) return m;
     return std::nullopt;
 }
@@ -121,6 +123,46 @@ export struct Request {
     std::string_view path;     // 解码后的路径（不含 query）
     std::string_view query;    // 原始 query（值未解码）
     std::string_view body;     // 原始 body（JSON 等）
+    std::string_view headers;  // 原始 header 块（请求行之后）
+
+    /**
+     * @brief 大小写不敏感读取 header；未命中返回 nullopt
+     *
+     * headers 是解析器缓冲区中的原始 CRLF 块；返回视图有效期同 Request。
+     * 同名 header 命中第一条；不分配内存。
+     */
+    std::optional<std::string_view> header(std::string_view name) const {
+        const auto lower = [](char c) {
+            return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + ('a' - 'A')) : c;
+        };
+        const auto equal_name = [&](std::string_view a, std::string_view b) {
+            if (a.size() != b.size()) return false;
+            for (std::size_t i = 0; i < a.size(); ++i)
+                if (lower(a[i]) != lower(b[i])) return false;
+            return true;
+        };
+
+        std::size_t pos = 0;
+        while (pos < headers.size()) {
+            std::size_t eol = headers.find("\r\n", pos);
+            if (eol == std::string_view::npos) eol = headers.size();
+            const std::string_view line = headers.substr(pos, eol - pos);
+            const std::size_t colon = line.find(':');
+            if (colon != std::string_view::npos
+                && equal_name(line.substr(0, colon), name)) {
+                std::string_view value = line.substr(colon + 1);
+                while (!value.empty()
+                       && (value.front() == ' ' || value.front() == '\t'))
+                    value.remove_prefix(1);
+                while (!value.empty()
+                       && (value.back() == ' ' || value.back() == '\t'))
+                    value.remove_suffix(1);
+                return value;
+            }
+            pos = eol + 2;
+        }
+        return std::nullopt;
+    }
 
     /** @brief query 参数取值（原始未解码视图；未命中 nullopt） */
     std::optional<std::string_view> query_raw(std::string_view name) const {

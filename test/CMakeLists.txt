@@ -71,6 +71,10 @@ add_executable(cboot_web_routing_smoke web/web_routing_smoke.cpp)
 target_link_libraries(cboot_web_routing_smoke PRIVATE cboot_web cboot_validation)
 add_test(NAME web_routing_smoke COMMAND cboot_web_routing_smoke)
 
+add_executable(cboot_web_middleware_smoke web/middleware_smoke.cpp)
+target_link_libraries(cboot_web_middleware_smoke PRIVATE cboot_web)
+add_test(NAME web_middleware_smoke COMMAND cboot_web_middleware_smoke)
+
 add_executable(cboot_web_server_smoke web/web_server_smoke.cpp)
 target_link_libraries(cboot_web_server_smoke PRIVATE cboot_web)
 add_test(NAME web_server_smoke COMMAND cboot_web_server_smoke)

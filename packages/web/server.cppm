@@ -21,6 +21,7 @@ export module cboot.web.server;
 
 import std;
 import cboot.web.http;
+import cboot.web.middleware;
 import cboot.web.routing;
 
 /** @brief 网络后端选择（平台/场景） */
@@ -112,6 +113,11 @@ public:
         requires (sizeof...(As) > 0)
     void mount(T& obj, As... aspects) {
         router_.mount(obj, std::move(aspects)...);
+    }
+
+    /** @brief 注册请求中间件（转 router::use） */
+    void use(std::string name, int order, web::middleware_fn fn) {
+        router_.use(std::move(name), order, std::move(fn));
     }
 
     /** @brief accept 循环（select 超时轮询 + 连接入队；实现于 src/web/server.cpp） */

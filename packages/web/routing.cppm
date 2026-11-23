@@ -3,10 +3,12 @@ export module cboot.web.routing;
 import std;
 import cboot.aop;            // call_info / aspect_chain（编译期切面）
 import cboot.async;          // task<Response> handler（协程请求路径）
+import cboot.core.annotations; // bean_name（路由中间件标签）
 import cboot.json;
 import cboot.meta.reflect;    // members_of / annotation_of / type_of_t（全局工具）
 import cboot.validation;      // body DTO 字段校验
 import cboot.web.http;
+import cboot.web.middleware;  // request_context / middleware_fn / UseMiddleware
 
 /**
  * @brief 路由 — 编译期路由表（注解提取）+ 运行时匹配调度
@@ -14,12 +16,14 @@ import cboot.web.http;
  * 编译期（consteval）：
  *   - route_table<T>()：扫描 T 的成员函数，提取 [[=Get]]/[[=Post]] 注解
  *     → constexpr 数组（method / pattern / handler info）
- *   - 参数分类（Request / body DTO / 路径参数）+ 路径参数槽位计算
+ *   - 参数分类（Request / request_context / body DTO / 路径参数）
+ *   - 路由级中间件标签 [[=UseMiddleware{"name"}]]
  * 运行时：
- *   - router：模板串匹配（"{x}" 段收参数）→ handler 调用
+ *   - router：模板串匹配（"{x}" 段收参数）→ middleware 链 → handler 调用
  *
  * handler 参数协议（按声明序）：
  *   Request（或 const Request&）→ 请求本体（≤1 个）
+ *   request_context（或 const&）→ 请求上下文（≤1 个）
  *   聚合体                     → JSON body 反序列化（≤1 个，POST）
  *   数值 / string / string_view → 路径参数（按 {x} 出现序消费）
  * 返回值：Response
@@ -109,17 +113,53 @@ consteval path_name nth_path_name() { return nth_route<T, I>().pattern; }
 // ── 切面元数据：bean 名 / 方法名（identifier_of 静态存储，字符串视图常驻）──
 template <class T>
 consteval std::string_view type_ident() {
-    return std::meta::identifier_of(^^T);
+    if (std::meta::has_identifier(^^T))
+        return std::meta::identifier_of(^^T);
+    return {};
 }
 
 template <class T, std::size_t I>
 consteval std::string_view handler_ident() {
-    return std::meta::identifier_of(nth_handler<T, I>());
+    constexpr std::meta::info h = nth_handler<T, I>();
+    if (std::meta::has_identifier(h))
+        return std::meta::identifier_of(h);
+    return {};
 }
 
 template <class T, std::size_t I>
 consteval call_info call_info_for() {
     return call_info{type_ident<T>(), handler_ident<T, I>()};
+}
+
+// ── 路由级中间件标签 ──────────────────────────────────────────────────
+
+template <class T, std::size_t I>
+consteval std::size_t middleware_tag_count() {
+    std::size_t n = 0;
+    for (auto a : std::meta::annotations_of_with_type(
+             nth_handler<T, I>(), ^^web::UseMiddleware))
+        ++n;
+    return n;
+}
+
+template <class T, std::size_t I, std::size_t K>
+consteval bean_name middleware_tag_name() {
+    std::size_t seen = 0;
+    for (auto a : std::meta::annotations_of_with_type(
+             nth_handler<T, I>(), ^^web::UseMiddleware)) {
+        if (seen == K) return std::meta::extract<web::UseMiddleware>(a).name;
+        ++seen;
+    }
+    return {};
+}
+
+template <class T, std::size_t I>
+inline std::vector<std::string> route_tags() {
+    std::vector<std::string> out;
+    [&]<std::size_t... K>(std::index_sequence<K...>) {
+        (out.emplace_back(middleware_tag_name<T, I, K>().view()), ...);
+    }(std::make_index_sequence<middleware_tag_count<T, I>()>{});
+    return out;
 }
 
 // ── handler 参数绑定 ────────────────────────────────────────────────────
@@ -149,17 +189,20 @@ consteval std::size_t path_slot() {
     return is_path_param_type<pts[J]>() ? k : std::size_t(-1);
 }
 
-/** @brief 构造第 J 个实参（Request / body DTO / 路径参数转换） */
+/** @brief 构造第 J 个实参（Request / request_context / body DTO / 路径参数） */
 template <std::meta::info Fn, std::size_t J>
-auto make_arg(const Request& req, const std::vector<std::string_view>& pp) {
+decltype(auto) make_arg(web::request_context& ctx,
+                        const std::vector<std::string_view>& pp) {
     constexpr std::meta::info pt = param_types_array<Fn>()[J];
     using P = type_of_t<pt>;
     if constexpr (pt == ^^Request) {
-        return req;    // const Request& / Request（按值拷贝）皆可绑定
+        return ctx.request;    // const Request& / Request（按值拷贝）皆可绑定
+    } else if constexpr (pt == ^^web::request_context) {
+        return ctx;
     } else if constexpr (std::is_aggregate_v<P> && !std::is_array_v<P>) {
         // body DTO：JSON 解析/类型错误与字段校验失败都归入 400。
         try {
-            P dto = json::get_as<P>(json::parse(req.body));
+            P dto = json::get_as<P>(json::parse(ctx.request.body));
             validation::validate_or_throw(dto);
             return dto;
         } catch (const validation::invalid&) {
@@ -186,10 +229,11 @@ auto make_arg(const Request& req, const std::vector<std::string_view>& pp) {
 
 /** @brief handler 调用（成员函数 splice + 参数按位构造） */
 template <class T, std::meta::info Fn>
-Response invoke(T& obj, const Request& req, const std::vector<std::string_view>& pp) {
+Response invoke(T& obj, web::request_context& ctx,
+                const std::vector<std::string_view>& pp) {
     constexpr std::size_t N = param_count<Fn>();
     return [&]<std::size_t... J>(std::index_sequence<J...>) -> Response {
-        auto&& r = (obj.[:Fn:])(make_arg<Fn, J>(req, pp)...);
+        auto&& r = (obj.[:Fn:])(make_arg<Fn, J>(ctx, pp)...);
         // 协程 handler：task<Response>（可 co_await 其他 task；I/O 级 await 后续）
         if constexpr (std::is_same_v<std::remove_cvref_t<decltype(r)>, task<Response>>) {
             return sync_wait(std::move(r));
@@ -200,13 +244,14 @@ Response invoke(T& obj, const Request& req, const std::vector<std::string_view>&
 }
 
 // handler 工厂：Fn 为模板实参（consteval 调用形态），lambda 无捕获负担
-using handler_fn = std::function<Response(const Request&,
+using handler_fn = std::function<Response(web::request_context&,
                                           const std::vector<std::string_view>&)>;
 
 template <class T, std::meta::info Fn>
 handler_fn make_handler(T& obj) {
-    return [&obj](const Request& req, const std::vector<std::string_view>& pp) {
-        return invoke<T, Fn>(obj, req, pp);
+    return [&obj](web::request_context& ctx,
+                  const std::vector<std::string_view>& pp) {
+        return invoke<T, Fn>(obj, ctx, pp);
     };
 }
 
@@ -238,11 +283,22 @@ public:
         mount_with_chain<T, 0>(obj, std::move(chain));
     }
 
+    /**
+     * @brief 注册中间件（启动期调用）
+     *
+     * name 为空 = 全局；非空 = 仅匹配带 [[=UseMiddleware{"name"}]] 的路由。
+     * order 小的在外层；同 order 按 name 稳定排序。
+     */
+    void use(std::string name, int order, web::middleware_fn fn);
+
     /** @brief 调度（404 未命中 / 405 方法不匹配；实现于 src/web/routing.cpp） */
     Response dispatch(std::string_view method, std::string_view target,
                       std::string_view body) const;
+    Response dispatch(std::string_view method, std::string_view target,
+                      std::string_view body, std::string_view headers) const;
 
     std::size_t size() const { return routes_.size(); }
+    std::size_t middleware_count() const { return middlewares_.size(); }
 
 private:
     // 递归注册（GCC16 纪律：consteval 临时上不做成员访问/模板实参——
@@ -252,7 +308,10 @@ private:
         if constexpr (I < detail::route_count<T>()) {
             add_route(detail::nth_method<T, I>(),
                       detail::nth_path_name<T, I>().view(),
-                      detail::make_handler<T, detail::nth_handler<T, I>()>(obj));
+                      detail::make_handler<T, detail::nth_handler<T, I>()>(obj),
+                      std::string(detail::type_ident<T>()),
+                      std::string(detail::handler_ident<T, I>()),
+                      detail::route_tags<T, I>());
             mount_one<T, I + 1>(obj);
         }
     }
@@ -263,28 +322,62 @@ private:
         if constexpr (I < detail::route_count<T>()) {
             add_route(detail::nth_method<T, I>(),
                       detail::nth_path_name<T, I>().view(),
-                      [&obj, chain](const Request& req,
+                      [&obj, chain](web::request_context& ctx,
                                     const std::vector<std::string_view>& pp) {
                           return chain->run(detail::call_info_for<T, I>(),
                                             [&]() -> Response {
                               return detail::invoke<T, detail::nth_handler<T, I>()>(
-                                  obj, req, pp);
+                                  obj, ctx, pp);
                           });
-                      });
+                      },
+                      std::string(detail::type_ident<T>()),
+                      std::string(detail::handler_ident<T, I>()),
+                      detail::route_tags<T, I>());
             mount_with_chain<T, I + 1>(obj, std::move(chain));
         }
     }
 
     struct route_item {
         http_method method;
+        std::string pattern;
         std::vector<std::string> segs;    // 预切分（"{x}" 起始段为参数段）
         detail::handler_fn h;
+        std::string bean;
+        std::string handler;
+        std::vector<std::string> middleware;
+    };
+
+    struct middleware_entry {
+        std::string name;    // 空 = 全局
+        int order = 0;
+        web::middleware_fn fn;
     };
 
     void add_route(http_method method, std::string_view pattern,
-                   detail::handler_fn h);
-    const route_item* match(bool is_post, std::string_view path,
-                            std::vector<std::string_view>& pp) const;
+                   detail::handler_fn h, std::string bean, std::string handler,
+                   std::vector<std::string> middleware);
+
+    template <class Core>
+    Response run_chain(std::size_t index, web::request_context& ctx,
+                       const Core& core) const {
+        while (index < middlewares_.size()) {
+            const auto& mw = middlewares_[index];
+            bool applies = mw.name.empty();
+            if (!applies && ctx.route) {
+                applies = std::find(ctx.route->middleware_tags.begin(),
+                                    ctx.route->middleware_tags.end(), mw.name)
+                    != ctx.route->middleware_tags.end();
+            }
+            if (applies) break;
+            ++index;
+        }
+        if (index == middlewares_.size()) return core();
+        web::next_fn next = [this, index, &ctx, &core] {
+            return run_chain(index + 1, ctx, core);
+        };
+        return middlewares_[index].fn(ctx, next);
+    }
 
     std::vector<route_item> routes_;
+    std::vector<middleware_entry> middlewares_;
 };
