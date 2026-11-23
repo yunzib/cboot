@@ -14,6 +14,7 @@ export import cboot.meta.reflect;       // for_each_member / type_list / type_of
 export import cboot.validation;         // NotBlank / Range / validate
 export import cboot.web.http;           // Get/Post/Put/Delete/Patch / Request / Response
 export import cboot.web.middleware;     // Middleware / UseMiddleware / request_context
+export import cboot.web.error;          // error_info / ErrorMapper / ErrorHandler
 export import cboot.web.routing;        // router
 export import cboot.web.server;         // server
 
@@ -217,6 +218,34 @@ void register_middlewares(server& s, Ctx& ctx) {
     }(std::make_index_sequence<sizeof...(Bs)>{});
 }
 
+/** @brief 注册带 [[=web::ErrorMapper]] 的 bean（按 order 升序） */
+template <class Ctx, class B, std::size_t I>
+void register_error_mapper(web::error_registry& errors, Ctx& ctx) {
+    constexpr auto mapper = annotation_of<web::ErrorMapper>(^^B);
+    if constexpr (mapper.has_value()) {
+        static_assert(web::ErrorMapperHandler<B>,
+                      "cboot.app: [[=ErrorMapper]] bean must provide "
+                      "handle(const error_info&, const request_context&) "
+                      "-> std::optional<Response>");
+        if (ctx.template is_active<I>()) {
+            errors.add(mapper->order,
+                [&ctx](const web::error_info& info,
+                       const web::request_context& rc) {
+                    return ctx.template get<B>().handle(info, rc);
+                });
+        }
+    }
+}
+
+template <class Ctx, class... Bs>
+void register_error_mappers(web::error_registry& errors, Ctx& ctx) {
+    [&]<std::size_t... I>(std::index_sequence<I...>) {
+        (register_error_mapper<Ctx, typename Ctx::template bean_type<I>, I>(
+             errors, ctx),
+         ...);
+    }(std::make_index_sequence<sizeof...(Bs)>{});
+}
+
 template <class... Ts, class... Hs>
 struct boot_runner<type_list<Ts...>, type_list<Hs...>> {
     template <class... As>
@@ -239,12 +268,21 @@ struct boot_runner<type_list<Ts...>, type_list<Hs...>> {
                 try { sc.send_timeout_ms = std::stoul(std::string(*v)); } catch (...) {}
             }
         }
+        // 全局错误层：registry 与 handler 先于 server 构造，保证生命周期覆盖 run。
+        web::error_registry errors;
+        register_error_mappers<context<Ts...>, Ts...>(errors, ctx);
+        web::ErrorHandler error_handler(errors);
+
         server s(sc);
         install_stop_handler(s);                  // Ctrl+C / 关闭 → 优雅停机
+        s.use("", web::error_middleware_order,
+              [&error_handler](web::request_context& rc,
+                               const web::next_fn& next) {
+                  return error_handler.handle(rc, next);
+              });
         register_middlewares<context<Ts...>, Ts...>(s, ctx);
         health_endpoint<context<Ts...>> ops(ctx); // 内建 /health /beans
-        s.mount(ops);
-        // 按清单下标挂载：同基类的多个 bean 用类型 get 会歧义；
+        s.mount(ops);        // 按清单下标挂载：同基类的多个 bean 用类型 get 会歧义；
         // 未激活 profile 的 bean 不挂载。
         [&]<std::size_t... Is>(std::index_sequence<Is...>) {
             ([&] {

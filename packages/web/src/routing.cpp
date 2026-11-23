@@ -11,6 +11,7 @@ import std;
 import cboot.validation;
 import cboot.web.http;
 import cboot.web.middleware;
+import cboot.web.error;
 
 namespace {
 
@@ -70,24 +71,6 @@ bool path_matches(const std::vector<std::string>& pattern,
     }
     pp = std::move(tmp);
     return true;
-}
-
-/** @brief 校验失败 → 400 + {"errors":[{"field","message"}]} */
-Response validation_error_response(
-    const std::vector<validation::field_error>& errors) {
-    json::array items;
-    for (const auto& e : errors) {
-        json::object item;
-        item.emplace_back("field", json::value(e.field));
-        item.emplace_back("message", json::value(e.message));
-        items.emplace_back(json::value(std::move(item)));
-    }
-    json::object root;
-    root.emplace_back("errors", json::value(std::move(items)));
-
-    Response r = json_response(json::value(std::move(root)));
-    r.status = 400;
-    return r;
 }
 
 } // namespace
@@ -180,28 +163,75 @@ Response router::dispatch(std::string_view method, std::string_view target,
 
     auto core = [&]() -> Response {
         if (matched) return matched->h(ctx, pp);
+
+        // 404/405 标记为框架错误；外层 ErrorHandler 可交给应用 mapper。
+        web::error_info info;
+        info.method = std::string(req.method);
+        info.path = std::string(req.path);
         if (!allow.empty()) {
-            Response r = Response::text("405 method not allowed");
-            r.status = 405;
-            r.header("Allow", std::move(allow));
-            return r;
+            info.status = 405;
+            info.code = "method_not_allowed";
+            info.message = "method not allowed";
+            info.headers.emplace_back("Allow", std::move(allow));
+        } else {
+            info.status = 404;
+            info.code = "not_found";
+            info.message = "not found";
         }
-        Response not_found = Response::text("404 not found");
-        not_found.status = 404;
-        return not_found;
+        Response response = web::default_error_response(info);
+        ctx.put(std::move(info));
+        return response;
     };
 
     try {
         return run_chain(0, ctx, core);
+    } catch (const web::error& e) {
+        auto info = e.info();
+        if (info.method.empty()) info.method = std::string(req.method);
+        if (info.path.empty()) info.path = std::string(req.path);
+        if (info.route_pattern.empty() && ctx.route)
+            info.route_pattern = std::string(ctx.route->pattern);
+        if (!info.cause) info.cause = std::current_exception();
+        Response response = web::default_error_response(info);
+        ctx.put(std::move(info));
+        return response;
     } catch (const validation::invalid& e) {
-        return validation_error_response(e.errors());
+        web::error_info info;
+        info.status = 400;
+        info.code = "validation_failed";
+        info.message = "validation failed";
+        info.method = std::string(req.method);
+        info.path = std::string(req.path);
+        if (ctx.route) info.route_pattern = std::string(ctx.route->pattern);
+        for (const auto& field : e.errors())
+            info.fields.push_back({field.field, field.message});
+        info.cause = std::current_exception();
+        Response response = web::default_error_response(info);
+        ctx.put(std::move(info));
+        return response;
     } catch (const std::exception& e) {
-        Response err = Response::text(std::string("500 ") + e.what());
-        err.status = 500;
-        return err;
+        web::error_info info;
+        info.status = 500;
+        info.code = "internal";
+        info.message = e.what();
+        info.method = std::string(req.method);
+        info.path = std::string(req.path);
+        if (ctx.route) info.route_pattern = std::string(ctx.route->pattern);
+        info.cause = std::current_exception();
+        Response response = web::default_error_response(info);
+        ctx.put(std::move(info));
+        return response;
     } catch (...) {
-        Response err = Response::text("500 internal error");
-        err.status = 500;
-        return err;
+        web::error_info info;
+        info.status = 500;
+        info.code = "internal";
+        info.message = "internal error";
+        info.method = std::string(req.method);
+        info.path = std::string(req.path);
+        if (ctx.route) info.route_pattern = std::string(ctx.route->pattern);
+        info.cause = std::current_exception();
+        Response response = web::default_error_response(info);
+        ctx.put(std::move(info));
+        return response;
     }
 }

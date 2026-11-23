@@ -26,6 +26,7 @@ module;
 module cboot.auth;
 
 import std;
+import cboot.web.error;
 import cboot.web.http;
 import cboot.web.middleware;
 
@@ -134,23 +135,6 @@ bool match_segments(const std::vector<std::string_view>& pattern,
     if (si == path.size()) return false;
     if (pattern[pi] != "*" && pattern[pi] != path[si]) return false;
     return match_segments(pattern, path, pi + 1, si + 1);
-}
-
-Response unauthorized() {
-    json::object body;
-    body.emplace_back("error", json::value("unauthorized"));
-    Response r = json_response(json::value(std::move(body)));
-    r.status = 401;
-    r.header("WWW-Authenticate", "Bearer");
-    return r;
-}
-
-Response forbidden() {
-    json::object body;
-    body.emplace_back("error", json::value("forbidden"));
-    Response r = json_response(json::value(std::move(body)));
-    r.status = 403;
-    return r;
 }
 
 } // namespace
@@ -424,7 +408,16 @@ Response AuthGuard::handle(web::request_context& ctx, const web::next_fn& next) 
             .path = std::string(ctx.request.path),
             .reason = "missing or invalid token",
         });
-        return unauthorized();
+
+        web::error_info info;
+        info.status = 401;
+        info.code = "auth.unauthorized";
+        info.message = "unauthorized";
+        info.method = std::string(ctx.request.method);
+        info.path = std::string(ctx.request.path);
+        if (ctx.route) info.route_pattern = std::string(ctx.route->pattern);
+        info.headers.emplace_back("WWW-Authenticate", "Bearer");
+        throw web::error(std::move(info));
     }
 
     if (!allows(*ctx.route, *s)) {
@@ -434,7 +427,16 @@ Response AuthGuard::handle(web::request_context& ctx, const web::next_fn& next) 
             .path = std::string(ctx.request.path),
             .reason = "missing required role or scope",
         });
-        return forbidden();
+
+        web::error_info info;
+        info.status = 403;
+        info.code = "auth.forbidden";
+        info.message = "forbidden";
+        info.subject = s->subject;
+        info.method = std::string(ctx.request.method);
+        info.path = std::string(ctx.request.path);
+        if (ctx.route) info.route_pattern = std::string(ctx.route->pattern);
+        throw web::error(std::move(info));
     }
 
     bus_.publish(authentication_succeeded{

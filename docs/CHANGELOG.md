@@ -21,6 +21,9 @@
   `clear_cookie`；`active_timeout_s` 滑动续期与 `TokenStore::touch`。
 - CORS：可选 `cors_component`（来源白名单/通配、预检 204、方法/
   请求头校验、凭证与暴露头）。
+- 全局错误层 `cboot.web.error`：`error_info` / `ErrorHandler` /
+  `ErrorMapper`，统一 404/405、校验 400、认证 401/403、handler 500；
+  `request_context::get<T>()`；AuthGuard 改为抛结构化 `web::error`。
 - 配置源：CLI `--key=value` / `--config`、`CB_` 环境变量，优先级
   CLI > env > JSON；配置绑定错误聚合全部非法键。
 - `cboot.auth.postgres`：`PgTokenStore`（表 `cboot_auth_sessions`）；

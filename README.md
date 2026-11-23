@@ -29,6 +29,9 @@
   `request_context`、短路、OPTIONS；中间件失败不会进入 handler。
 - **CORS**：可选 `cors_component`，来源白名单/通配、预检 204、
   方法/请求头校验、凭证与暴露头。
+- **错误处理**：全局 `ErrorHandler` middleware + `ErrorMapper`，
+  统一 404/405、校验 400、认证 401/403、handler 500；
+  `request_context::get<T>()` 取上下文属性。
 - **认证**：`cboot.auth` 登录态（opaque token、login/logout/kickout、
   路由策略、控制器级/方法级 `RequireRole`/`RequireScope`、Memory/PostgreSQL TokenStore、
   Header/Cookie 传输、滑动续期、认证事件）；`cboot.jwt` 独立提供 HS256/RS256 校验。
@@ -236,6 +239,7 @@ Release 构建、8 连接、16 万请求、0 失败：
 - [定时任务](docs/定时任务.md)
 - [DTO 校验](docs/校验.md)
 - [中间件](docs/中间件.md)
+- [全局错误处理](docs/错误处理.md)
 - [CORS](docs/CORS.md)
 - [自定义认证](docs/自定义认证.md)
 - [认证](docs/认证.md)
@@ -246,6 +250,7 @@ Release 构建、8 连接、16 万请求、0 失败：
 - [性能测试与 Java 对拍](docs/性能测试.md)
 - [完整示例（独立应用：安装 SDK + find_package + class）](examples/standalone/README.md)
 - [ORM 示例（PostgreSQL + find_package(cboot.orm.postgres)）](examples/orm/README.md)
+- [全栈待办示例（PostgreSQL + 登录认证 + 原生 HTML）](examples/todo/README.md)
 
 # 6. 目录
 

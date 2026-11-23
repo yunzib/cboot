@@ -65,6 +65,18 @@ public:
         return nullptr;
     }
 
+    /**
+     * @brief 取类型 T 的属性；不存在抛 std::logic_error
+     *
+     * 用于“上游 middleware 保证已写入”的约定（如 AuthGuard → auth::session）。
+     * 属性缺失属于框架/配置错误，由 ErrorHandler 统一转 500，避免空指针。
+     */
+    template <class T>
+    const T& get() const {
+        if (const auto* p = find<T>()) return *p;
+        throw std::logic_error("cboot.web: request_context attribute missing");
+    }
+
     /** @brief 写入/覆盖类型 T 的属性 */
     template <class T>
     void put(T value) {

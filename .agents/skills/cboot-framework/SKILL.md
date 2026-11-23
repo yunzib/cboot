@@ -376,9 +376,16 @@ struct App : application<App> {
 - 中间件 Bean：`[[=web::Middleware{.name, .order}]]` + `handle(request_context&, next_fn)`。
   `name` 为空 = 全局；非空 = 仅路由带 `[[=web::UseMiddleware{"name"}]]` 时执行。
 - `Request` 暴露原始 headers 与 `header("Authorization")`；`http_method`
-  包含 `OPTIONS`。`request_context` 有类型化属性槽（`put/find`）。
+  包含 `OPTIONS`。`request_context` 有类型化属性槽（`put/find/get`）；
+  `get<T>()` 在属性缺失时抛 `logic_error`（fail-loud）。
 - handler 可声明 `const web::request_context&` 参数；顺序：
   parser → middleware → route → aspects → handler。
+- 全局错误层：`web::ErrorHandler` 是普通全局 middleware（order -900，
+  CORS 内层），捕获下游异常并接管 router 标记的 404/405/校验失败；
+  应用用 `[[=Bean{}]] [[=web::ErrorMapper{.order=N}]]` +
+  `handle(error_info, ctx) -> optional<Response>` 自定义响应。
+  AuthGuard 抛 `web::error`，不再自己拼 401/403。解析 400/413 与
+  504 属 connector/SLA 层，不经过 ErrorHandler。
 - CORS：可选 `cors_component`（`cboot::web`）贡献 `web::CorsProps` +
   全局 `web::Cors`（order -1000）。来源白名单支持 `*` 通配；预检
   `OPTIONS` 204 短路，校验方法/请求头；`allow_credentials` 禁止裸 `*`。
@@ -389,8 +396,8 @@ struct App : application<App> {
   （AuthProps/AuthPolicy/AuthService/AuthGuard + policy hook）不直接提供
   TokenStore；应用选 `auth_memory_component` 或 `auth_postgres_component`。
 - `AuthGuard` 按 `public_paths` / `protected_paths` / `default_policy` 匹配；
-  成功写入 `auth::session`，失败 401；发布 `authentication_*` /
-  `authorization_failed` 事件。
+  成功写入 `auth::session`，失败发布 `authentication_*` /
+  `authorization_failed` 并抛 `web::error`（401/403），由 ErrorHandler 生成响应。
 - token 传输：`token_header`/`token_prefix`，`token_cookie` 非空时 header
   缺失回退 Cookie；`attach_cookie` / `clear_cookie` 写 Set-Cookie。
 - 滑动续期：`active_timeout_s > 0` 时每次认证把 expires_at 延到
@@ -405,8 +412,8 @@ struct App : application<App> {
   依赖 `auth_component` + `postgres_component`。
 - CMake：`cboot::auth` / `cboot::auth_postgres` / `cboot::jwt`；
   auth 不依赖 OpenSSL，jwt 依赖 OpenSSL。
-- 测试：`web_middleware_smoke`、`cors_smoke`、`jwt_smoke`、`auth_smoke`、
-  `auth_postgres_smoke`（需 `CBOOT_TEST_PG_URL`）。
+- 测试：`web_middleware_smoke`、`cors_smoke`、`error_smoke`、`jwt_smoke`、
+  `auth_smoke`、`auth_postgres_smoke`（需 `CBOOT_TEST_PG_URL`）。
 
 ## 健康检查
 
@@ -437,7 +444,7 @@ struct App : application<App> {
   直接链接本包 `DEPENDS` 的 provider target。
 - 改公开 API 后同时更新 `README.md`、`docs/使用手册.md`、
   `docs/契约组件.md`、`docs/定时任务.md`、`docs/ORM.md`、
-  `docs/认证.md` 与 `docs/CORS.md`；
+  `docs/认证.md`、`docs/CORS.md` 与 `docs/错误处理.md`；
   `docs/任务清单.md` 是本地忽略文件，按需更新。
 
 ## GCC 16 反射/模块排错清单

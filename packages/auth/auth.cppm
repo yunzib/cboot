@@ -399,7 +399,8 @@ struct authentication_succeeded {
  * @brief 全局认证守卫
  *
  * AuthProps 决定哪些路由公开/受保护；默认 protected。
- * 失败发布 authentication_failed 并返回 401；成功发布
+ * 失败发布 authentication_failed / authorization_failed 并抛出
+ * web::error（401/403），由全局 ErrorHandler 生成响应；成功发布
  * authentication_succeeded 并把 auth::session 放入 request_context。
  */
 class [[=Bean{}]] [[=web::Middleware{.order = 100}]] AuthGuard {
