@@ -100,6 +100,61 @@ int main(int argc, char**) {
     service.kickout("user-42");
     if (service.find(token).has_value()) return 4;
 
+    // ── 双 token：登录对 / 换发 / 轮换 / 种类隔离 ──────────────────────
+    props.refresh_timeout_s = 86400;           // 开启 refresh 流程
+    {
+        const auto pair = service.login_pair(auth::session{
+            .subject = "user-pair",
+            .roles = {"admin"},
+            .scopes = {"read"},
+            .device = "cli",
+        });
+        if (pair.access_token.empty() || pair.refresh_token.empty()) return 40;
+        if (pair.refresh_expires_at <= pair.access_expires_at) return 41;
+        // access 可当请求凭证；refresh 不可
+        auto a = service.find(pair.access_token);
+        if (!a || a->subject != "user-pair" || a->kind != "access") return 42;
+        if (service.find(pair.refresh_token).has_value()) return 43;
+
+        // 换发：新 access 有效，新 refresh 轮换、旧 refresh 失效
+        auto next = service.refresh(pair.refresh_token);
+        if (!next || next->access_token == pair.access_token) return 44;
+        if (next->refresh_token.empty()
+            || next->refresh_token == pair.refresh_token) return 45;
+        auto n = service.find(next->access_token);
+        if (!n || n->subject != "user-pair" || n->device != "cli") return 46;
+        if (service.refresh(pair.refresh_token).has_value()) return 47;
+
+        // access token 不能当 refresh 用
+        if (service.refresh(pair.access_token).has_value()) return 48;
+
+        // logout_pair：两个 token 一起失效
+        service.logout_pair(next->access_token, next->refresh_token);
+        if (service.find(next->access_token).has_value()) return 49;
+        if (service.refresh(next->refresh_token).has_value()) return 50;
+    }
+
+    // rotate_refresh=false：refresh 可重复使用
+    {
+        props.rotate_refresh = false;
+        const auto pair = service.login_pair(auth::session{.subject = "user-keep"});
+        auto r1 = service.refresh(pair.refresh_token);
+        auto r2 = service.refresh(pair.refresh_token);
+        if (!r1 || !r2) return 51;
+        if (r1->refresh_token != pair.refresh_token
+            || r2->refresh_token != pair.refresh_token) return 52;
+        props.rotate_refresh = true;
+    }
+
+    // refresh_timeout_s=0（默认关闭）：login_pair 只发 access，refresh 恒失败
+    {
+        props.refresh_timeout_s = 0;
+        const auto pair = service.login_pair(auth::session{.subject = "user-off"});
+        if (!pair.refresh_token.empty()) return 53;
+        if (service.refresh("whatever").has_value()) return 54;
+        props.refresh_timeout_s = 86400;
+    }
+
     // ── AuthGuard + 路由策略 + 事件 ────────────────────────────────────
     struct Counts { int ok = 0; int failed = 0; };
     Counts counts;

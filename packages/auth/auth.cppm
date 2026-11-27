@@ -55,9 +55,22 @@ struct [[=Config{"auth"}]] AuthProps {
     std::string default_policy{"protected"};
     std::vector<std::string> public_paths;
     std::vector<std::string> protected_paths;
+    /// refresh token 有效期（秒；0 = 关闭双 token 流程，仅发 access token）
+    int refresh_timeout_s{0};
+    /// 续期时是否轮换 refresh token（旧的立即失效；默认开）
+    bool rotate_refresh{true};
 };
 
-/** @brief 登录态；认证成功后写入 request_context */
+/** @brief token 种类：access（请求凭证）/ refresh（换发凭证） */
+inline constexpr std::string_view access_token_kind = "access";
+inline constexpr std::string_view refresh_token_kind = "refresh";
+
+/**
+ * @brief 登录态；认证成功后写入 request_context
+ *
+ * kind 区分 access/refresh：AuthService::find/current 只接受 access，
+ * 防止 refresh token 被当作请求凭证使用（权限混淆）。
+ */
 struct session {
     std::string subject;
     std::vector<std::string> roles;
@@ -65,6 +78,15 @@ struct session {
     std::int64_t issued_at{};    // 登录时间；滑动续期的绝对上限基准
     std::int64_t expires_at{};
     std::string device;
+    std::string kind{access_token_kind};   // access / refresh（空视同 access）
+};
+
+/** @brief 双 token 登录结果；refresh_timeout_s=0 时 refresh_token 为空 */
+struct token_pair {
+    std::string access_token;
+    std::string refresh_token;
+    std::int64_t access_expires_at{};
+    std::int64_t refresh_expires_at{};
 };
 
 /** @brief 兼容命名：principal 就是 session */
@@ -136,10 +158,28 @@ public:
     /** @brief 创建登录态；expires_at 为 0 时使用 AuthProps.timeout_s */
     std::string login(session s);
 
+    /**
+     * @brief 双 token 登录：access + refresh（refresh_timeout_s>0 时）
+     *
+     * 两者是独立的 opaque token 记录，kind 分别标记 access/refresh；
+     * refresh 记录带同一 subject/roles/scopes/device，有效期取自
+     * refresh_timeout_s。refresh_timeout_s=0 时退化为仅 access。
+     */
+    token_pair login_pair(session s);
+
+    /**
+     * @brief 用 refresh token 换发新 access（可选轮换 refresh）
+     *
+     * 校验：token 存在、未过期、kind == refresh；否则 nullopt。
+     * rotate_refresh=true 时返回新 refresh 并立即撤销旧值（旧值再用即
+     * 失效——不做 token 家族检测，复用旧值只会得到 401）。
+     */
+    std::optional<token_pair> refresh(std::string_view refresh_token);
+
     /** @brief 从请求头提取 token 并查询；失败 nullopt */
     std::optional<session> current(const web::request_context& ctx) const;
 
-    /** @brief 直接按 token 查询 */
+    /** @brief 直接按 token 查询；refresh 种类 token 视为无效（只认 access） */
     std::optional<session> find(std::string_view token) const;
 
     /** @brief 撤销请求中的 token */
@@ -147,6 +187,10 @@ public:
 
     /** @brief 撤销指定 token */
     void logout(std::string_view token);
+
+    /** @brief 撤销 access + refresh 两个 token（登出时成对清理） */
+    void logout_pair(std::string_view access_token,
+                     std::string_view refresh_token);
 
     /** @brief 踢掉 subject 的全部登录态 */
     void kickout(std::string_view subject);

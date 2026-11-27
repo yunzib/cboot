@@ -1,6 +1,8 @@
 // 健康检查 / 运维端点冒烟测试
 //
-// 覆盖：/health 200/503、JSON 字段、/beans 仅 dev、bean 清单与依赖。
+// 覆盖：/health 200/503、JSON 字段、/beans 仅 dev、bean 清单与依赖；
+//      k8s 三探针 /livez（依赖 DOWN 仍 200）、/readyz（DOWN→503）、
+//      /startupz（200）。
 import cboot.app;
 import std;
 
@@ -46,6 +48,28 @@ int main() {
     // 4. 恢复
     ctx.get<Downable>().recover();
     if (r.dispatch("GET", "/health", "").status != 200) return 9;
+
+    // 4b. k8s 三探针：正常态全 200
+    if (r.dispatch("GET", "/livez", "").status != 200) return 15;
+    if (r.dispatch("GET", "/startupz", "").status != 200) return 16;
+    {
+        auto ready = r.dispatch("GET", "/readyz", "");
+        if (ready.status != 200) return 17;
+        if (json::parse(ready.body).find("status")->as_string() != "READY")
+            return 18;
+    }
+
+    // 4c. 依赖 DOWN：liveness 仍 200（不误重启），readiness 503 + reason
+    ctx.get<Downable>().fail();
+    if (r.dispatch("GET", "/livez", "").status != 200) return 19;
+    {
+        auto ready = r.dispatch("GET", "/readyz", "");
+        if (ready.status != 503) return 20;
+        auto rv = json::parse(ready.body);
+        if (rv.find("status")->as_string() != "NOT_READY") return 21;
+        if (rv.find("reason")->as_string() != "database down") return 22;
+    }
+    ctx.get<Downable>().recover();
 
     // 5. dev profile：/beans 返回 bean 清单
     config::properties dev;

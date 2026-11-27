@@ -1,0 +1,18 @@
+{
+  "_comment": "include=[] scans the whole workspace; add files/dirs to restrict. exclude adds globs. includePaths adds external roots.",
+  "include": [
+    { "path": "C:/software/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/x86_64-w64-mingw32/include", "scan": false },
+    { "path": "C:/software/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.2.0/include", "scan": false },
+    { "path": "C:/software/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.2.0/include/c++", "scan": false },
+    { "path": "C:/software/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.2.0/include/c++/x86_64-w64-mingw32", "scan": false },
+    { "path": "C:/software/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.2.0/include/c++/backward", "scan": false }
+  ],
+  "modules": {
+    "std": "C:/software/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.2.0/include/c++/bits/std.cc",
+    "std.compat": "C:/software/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.2.0/include/c++/bits/std.compat.cc"
+  },
+  "resolveDepth": 2,
+  "exclude": ["build", "build-release", ".git"],
+  "includePaths": [],
+  "defines": []
+}

@@ -101,11 +101,112 @@ template <class... Ts, class T>
 struct contains<type_list<Ts...>, T>
     : std::bool_constant<(std::is_same_v<Ts, T> || ...)> {};
 
-/** @brief 通用 orm_component 只暴露 EntityManager */
+/** @brief 通用 orm_component 暴露 EntityManager 与 MigrationRunner */
 struct OrmApp : application<OrmApp> {
     using components = type_list<orm_component>;
 };
 static_assert(contains<app_beans_t<OrmApp>, orm::EntityManager>::value);
+static_assert(contains<app_beans_t<OrmApp>, orm::MigrationRunner>::value);
+
+// ── 迁移执行器的无数据库桩：模拟版本表 + BEGIN/COMMIT/ROLLBACK ──────
+struct fake_db_state {
+    std::int64_t version = 0;          // 已提交版本（0 = 空表）
+    std::int64_t pending = 0;          // 事务内待提交版本
+    bool in_tx = false;
+    std::vector<std::string> script_log;   // 脚本执行顺序
+};
+
+/** @brief 假 statement：SELECT MAX(version) 单行 / INSERT 版本行 */
+class FakeMigrationStatement final : public orm::statement {
+public:
+    enum class kind { select_version, insert_version };
+
+    FakeMigrationStatement(kind k, std::shared_ptr<fake_db_state> st)
+        : kind_(k), state_(std::move(st)) {}
+
+    void bind(std::size_t index, const orm::db_value& value) override {
+        if (index == 0) {
+            if (auto p = std::get_if<std::int64_t>(&value)) bound_ = *p;
+        }
+    }
+    bool next() override {
+        if (kind_ == kind::insert_version) {
+            state_->pending = bound_;    // 事务提交时才生效（见 execute）
+            return false;
+        }
+        return true;                     // SELECT 恒返回一行
+    }
+    bool is_null(std::size_t) override { return state_->version == 0; }
+    std::int64_t get_int(std::size_t) override { return state_->version; }
+    double get_double(std::size_t) override { return 0; }
+    std::string_view get_text(std::size_t) override { return {}; }
+    std::size_t column_count() const override { return 1; }
+    std::string_view column_name(std::size_t) const override { return "v"; }
+    std::size_t affected_rows() const override { return 0; }
+
+private:
+    kind kind_;
+    std::shared_ptr<fake_db_state> state_;
+    std::int64_t bound_ = 0;
+};
+
+/** @brief 假连接：识别 BEGIN/COMMIT/ROLLBACK/建表与脚本 SQL */
+class FakeMigrationConnection final : public orm::connection {
+public:
+    explicit FakeMigrationConnection(std::shared_ptr<fake_db_state> st)
+        : state_(std::move(st)) {}
+
+    std::unique_ptr<orm::statement> prepare(std::string_view sql) override {
+        if (sql.rfind("SELECT MAX(version)", 0) == 0)
+            return std::make_unique<FakeMigrationStatement>(
+                FakeMigrationStatement::kind::select_version, state_);
+        return std::make_unique<FakeMigrationStatement>(
+            FakeMigrationStatement::kind::insert_version, state_);
+    }
+
+    void execute(std::string_view sql) override {
+        if (sql == "BEGIN") {
+            state_->in_tx = true;
+            state_->pending = state_->version;
+            return;
+        }
+        if (sql == "COMMIT") {
+            state_->in_tx = false;
+            state_->version = state_->pending;
+            return;
+        }
+        if (sql == "ROLLBACK") {
+            state_->in_tx = false;
+            return;
+        }
+        if (sql.rfind("CREATE TABLE IF NOT EXISTS", 0) == 0) return;
+        if (sql == "FAIL") throw orm::error("fake failure");
+        state_->script_log.emplace_back(sql);
+    }
+
+    std::int64_t last_insert_id() override { return 0; }
+
+private:
+    std::shared_ptr<fake_db_state> state_;
+};
+
+/** @brief 假 DataSource：每次 acquire 都返回共享同一状态的新连接 */
+class FakeDataSource final : public orm::DataSource {
+public:
+    explicit FakeDataSource(std::shared_ptr<fake_db_state> st)
+        : state_(std::move(st)) {}
+
+    orm::connection_lease acquire() override {
+        auto* c = new FakeMigrationConnection(state_);
+        return orm::connection_lease(c, [](orm::connection* p) { delete p; });
+    }
+
+    const orm::dialect& dialect() const override { return dialect_; }
+
+private:
+    std::shared_ptr<fake_db_state> state_;
+    TestDialect dialect_;
+};
 
 int main() {
     const TestDialect d;
@@ -196,6 +297,48 @@ int main() {
     try {
         (void)orm::fetch_rows_named<User>(missing);
         return 25;
+    } catch (const orm::error&) {}
+
+    // ── 4. schema 迁移：乱序应用 / 幂等 / 失败回滚 / 版本校验 ──────────
+    auto db = std::make_shared<fake_db_state>();
+    FakeDataSource ds(db);
+    orm::MigrationRunner runner(ds);
+
+    const std::array<orm::migration_script, 2> scripts{{
+        {2, "second", "SQL2"},
+        {1, "first", "SQL1"},
+    }};
+    if (runner.run(std::span<const orm::migration_script>(scripts)) != 2)
+        return 26;
+    if (db->version != 2) return 27;
+    // 按版本升序执行（不是声明顺序）
+    if (db->script_log != std::vector<std::string>{"SQL1", "SQL2"}) return 28;
+    // 幂等：再次运行不重复应用
+    if (runner.run(std::span<const orm::migration_script>(scripts)) != 0)
+        return 29;
+    if (db->version != 2 || db->script_log.size() != 2) return 30;
+
+    // 失败脚本：回滚、版本不前进、异常带版本信息
+    const std::array<orm::migration_script, 1> bad{{{3, "third", "FAIL"}}};
+    bool failed = false;
+    try {
+        runner.run(std::span<const orm::migration_script>(bad));
+    } catch (const orm::error& e) {
+        failed = std::string(e.what()).find("migration v3") != std::string::npos;
+    }
+    if (!failed || db->version != 2) return 31;
+
+    // 版本校验：重复版本 / 非正版本在触库前报错
+    const std::array<orm::migration_script, 2> dup{{
+        {1, "a", "SQL"}, {1, "b", "SQL"}}};
+    try {
+        runner.run(std::span<const orm::migration_script>(dup));
+        return 32;
+    } catch (const orm::error&) {}
+    const std::array<orm::migration_script, 1> zero{{{0, "zero", "SQL"}}};
+    try {
+        runner.run(std::span<const orm::migration_script>(zero));
+        return 33;
     } catch (const orm::error&) {}
 
     std::println("ORM GENERIC SMOKE: PASS");

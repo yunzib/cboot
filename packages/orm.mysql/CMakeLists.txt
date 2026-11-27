@@ -24,7 +24,7 @@ cboot_component(orm_mysql
     VERSION 0.1.0
     MODULES orm.mysql.cppm
     SOURCES src/mysql.cpp
-    DEPENDS meta core config orm
+    DEPENDS meta core config log orm
     PACKAGE_DEPENDS cboot.orm MySQL
     TEST_SOURCES test/mysql_smoke.cpp
 )

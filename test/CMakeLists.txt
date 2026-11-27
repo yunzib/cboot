@@ -83,6 +83,21 @@ add_executable(cboot_error_smoke web/error_smoke.cpp)
 target_link_libraries(cboot_error_smoke PRIVATE cboot_web cboot_core cboot_validation)
 add_test(NAME error_smoke COMMAND cboot_error_smoke)
 
+# 访问日志 / request_id（AccessLog 中间件：纯逻辑，无 socket）
+add_executable(cboot_access_smoke web/access_smoke.cpp)
+target_link_libraries(cboot_access_smoke PRIVATE cboot_web cboot_log)
+add_test(NAME access_smoke COMMAND cboot_access_smoke)
+
+# 指标注册表 + 请求指标（registry / Prometheus 渲染 / AccessLog 集成）
+add_executable(cboot_metrics_smoke web/metrics_smoke.cpp)
+target_link_libraries(cboot_metrics_smoke PRIVATE cboot_web cboot_log)
+add_test(NAME metrics_smoke COMMAND cboot_metrics_smoke)
+
+# 限流中间件（固定窗口 / 维度 / 时钟注入 / 429 / 指标）
+add_executable(cboot_ratelimit_smoke web/ratelimit_smoke.cpp)
+target_link_libraries(cboot_ratelimit_smoke PRIVATE cboot_web)
+add_test(NAME ratelimit_smoke COMMAND cboot_ratelimit_smoke)
+
 add_executable(cboot_web_server_smoke web/web_server_smoke.cpp)
 target_link_libraries(cboot_web_server_smoke PRIVATE cboot_web)
 add_test(NAME web_server_smoke COMMAND cboot_web_server_smoke)
@@ -177,7 +192,8 @@ set_tests_properties(
     context_smoke named_smoke value_smoke profile_smoke event_smoke
     scheduled_smoke schedule_expr_smoke component_smoke health_smoke
     json_smoke config_smoke web_routing_smoke smoke_reflect class_smoke
-    aop_smoke autoscan_smoke async_smoke backend_select_smoke
+    aop_smoke autoscan_smoke async_smoke backend_select_smoke access_smoke
+    metrics_smoke ratelimit_smoke
     backpressure_smoke backpressure_iocp_smoke
     handler_timeout_smoke handler_timeout_iocp_smoke
     PROPERTIES TIMEOUT 30)

@@ -43,7 +43,7 @@ cboot_component(orm_postgres
     VERSION 0.1.0
     MODULES orm.postgres.cppm
     SOURCES src/postgres.cpp
-    DEPENDS meta core config orm
+    DEPENDS meta core config log orm
     PACKAGE_DEPENDS cboot.orm PostgreSQL
     TEST_SOURCES test/postgres_smoke.cpp
 )

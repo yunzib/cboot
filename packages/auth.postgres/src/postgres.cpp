@@ -22,6 +22,7 @@ struct [[=orm::Table{.name = "cboot_auth_sessions"}]] token_row {
     std::int64_t issued_at{};
     std::int64_t expires_at{};
     std::string device;
+    std::string kind;      // access / refresh（旧行空串视同 access）
 };
 
 static_assert(!orm::entity_meta_v<token_row>.id_generated,
@@ -66,6 +67,12 @@ void PgTokenStore::ensure_schema() {
         "ALTER TABLE " + table + " ADD COLUMN IF NOT EXISTS " + issued
             + " BIGINT NOT NULL DEFAULT 0",
         {});
+    // 双 token：kind 列（access/refresh）；旧行默认空串 = access
+    const std::string kind = d.quote_identifier("kind");
+    impl_->db->execute(
+        "ALTER TABLE " + table + " ADD COLUMN IF NOT EXISTS " + kind
+            + " TEXT NOT NULL DEFAULT ''",
+        {});
     impl_->db->execute(
         "CREATE INDEX IF NOT EXISTS " + index + " ON " + table
             + " (" + subject + ")",
@@ -85,6 +92,7 @@ std::string PgTokenStore::create(session s) {
         .issued_at = s.issued_at,
         .expires_at = s.expires_at,
         .device = std::move(s.device),
+        .kind = std::move(s.kind),
     };
     impl_->db->insert(row);
     return row.token;
@@ -107,6 +115,9 @@ std::optional<session> PgTokenStore::get(std::string_view token) const {
         s.issued_at = row->issued_at;
         s.expires_at = row->expires_at;
         s.device = std::move(row->device);
+        // 旧行 kind 为空串 → 视为 access（向后兼容）
+        s.kind = row->kind.empty() ? std::string(access_token_kind)
+                                   : std::move(row->kind);
         return s;
     } catch (const std::exception&) {
         // 持久化行损坏时视为无效 token，不泄露内部细节

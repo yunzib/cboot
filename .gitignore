@@ -7,3 +7,4 @@ docs/任务清单.md
 build-test/
 build-debug/
 build-rwdi/
+.vscode/cache/

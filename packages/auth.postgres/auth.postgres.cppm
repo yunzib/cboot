@@ -23,10 +23,11 @@ export namespace auth {
  *
  * 表 cboot_auth_sessions：
  *   token TEXT PRIMARY KEY, subject TEXT, roles_json TEXT, scopes_json TEXT,
- *   issued_at BIGINT, expires_at BIGINT, device TEXT
+ *   issued_at BIGINT, expires_at BIGINT, device TEXT, kind TEXT
  *
- * 启动时 [[=PostConstruct]] 建表和 subject 索引。
- * 旧表需手动补 issued_at 列（见文档迁移说明）。
+ * 启动时 [[=PostConstruct]] 建表、subject 索引，并给旧表自动补
+ * issued_at / kind 列（ALTER TABLE IF NOT EXISTS）；旧行 kind 空串
+ * 视同 access。
  */
 class [[=Bean{}]] PgTokenStore final : public TokenStore {
 public:

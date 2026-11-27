@@ -8,7 +8,9 @@
 cboot_package(web
     VERSION ${CBOOT_VERSION}
     TIER runtime
-    MODULES http.cppm parser.cppm session.cppm middleware.cppm error.cppm cors.cppm routing.cppm server.cppm
+    # access.cppm：request_id + 访问日志（依赖 log 的 MDC/logger、json 转义）
+    # ratelimit.cppm：固定窗口限流中间件（依赖 metrics 计数）
+    MODULES http.cppm parser.cppm session.cppm middleware.cppm access.cppm error.cppm cors.cppm ratelimit.cppm routing.cppm server.cppm
     SOURCES src/routing.cpp src/server.cpp src/iocp.cpp src/epoll.cpp
     DEPENDS aop async core json log meta validation
 )

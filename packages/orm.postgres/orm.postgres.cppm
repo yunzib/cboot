@@ -39,6 +39,10 @@ struct [[=Config{"db"}]] PgProps {
     int pool_size{4};
     int connect_timeout_s{5};
     int acquire_timeout_ms{5000};
+    /// 空闲多久后借出前做一次活性探测（秒；0 = 只查本地状态，不发探测查询）
+    int idle_probe_s{30};
+    /// 慢 SQL 阈值（毫秒；0 = 关闭慢 SQL 日志；指标不受影响）
+    int slow_query_ms{200};
 };
 
 /**

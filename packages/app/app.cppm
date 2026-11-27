@@ -8,6 +8,7 @@ import std;
 export import cboot.aop;                // call_info / AspectFor / aspect_chain
 export import cboot.config;             // config::properties / bind
 export import cboot.core.annotations;   // Bean / Inject / Config / 生命周期
+export import cboot.core.metrics;       // metrics::global()（指标注册表）
 export import cboot.core.context;       // context / context_for
 export import cboot.json;               // json::value / parse / from
 export import cboot.log;                // logging::get / logger / sinks
@@ -16,7 +17,9 @@ export import cboot.meta.reflect;       // for_each_member / type_list / type_of
 export import cboot.validation;         // NotBlank / Range / validate
 export import cboot.web.http;           // Get/Post/Put/Delete/Patch / Request / Response
 export import cboot.web.middleware;     // Middleware / UseMiddleware / request_context
+export import cboot.web.access;         // AccessLog / request_id（请求关联层）
 export import cboot.web.error;          // error_info / ErrorMapper / ErrorHandler
+export import cboot.web.ratelimit;      // RateLimiter / rate_limit_options
 export import cboot.web.routing;        // router
 export import cboot.web.server;         // server
 
@@ -47,8 +50,18 @@ struct scan_anchor {};
 /**
  * @brief 内建运维端点（应用启动时自动挂载）
  *
- *   GET /health → 200 UP / 503 DOWN，JSON：status/beans/startup_ms/reason
- *   GET /beans  → 仅 dev profile：bean 清单、激活状态、依赖
+ *   GET /health  → 200 UP / 503 DOWN，JSON：status/beans/startup_ms/reason
+ *   GET /beans   → 仅 dev profile：bean 清单、激活状态、依赖
+ *   GET /livez   → 200（进程可服务即通过；不依赖任何外部资源）
+ *   GET /readyz  → 200 READY / 503 NOT_READY（依赖健康：DB 等 DOWN 时摘流量）
+ *   GET /startupz→ 200（容器构造完成；供 k8s startupProbe 使用）
+ *
+ * 探针语义（k8s 三探针）：
+ *   - liveness 失败 → 重启进程；因此 /livez 永不看依赖状态
+ *   - readiness 失败 → 从 Service 摘除，不重启；看 health_registry
+ *     （驱动建连失败会 set_unhealthy，恢复后 set_healthy）
+ *   - startup 失败 → 重启并放慢重试；本框架端点挂载发生在容器构造
+ *     之后，能访问即已启动完成，故 /startupz 恒 200
  *
  * 用户不需要实例化；`boot_runner` 会挂到 router 上。
  */
@@ -75,6 +88,41 @@ public:
         Response r;
         r.status = h.healthy ? 200 : 503;
         r.body = std::move(body);
+        return r;
+    }
+
+    /** @brief liveness：进程能处理请求即 UP（绝不再看依赖，避免误重启） */
+    [[=Get{"/livez"}]]
+    Response livez() {
+        Response r;
+        r.body = "{\"status\":\"UP\"}";
+        return r;
+    }
+
+    /** @brief readiness：依赖健康才 READY；否则 503 + reason（摘流量不重启） */
+    [[=Get{"/readyz"}]]
+    Response readyz() {
+        const health_snapshot h = ctx_.health();
+        std::string body;
+        body += "{\"status\":\"";
+        body += h.healthy ? "READY" : "NOT_READY";
+        body += "\"";
+        if (!h.healthy) {
+            body += ",\"reason\":";
+            json::write_escaped(body, h.reason);
+        }
+        body += "}";
+        Response r;
+        r.status = h.healthy ? 200 : 503;
+        r.body = std::move(body);
+        return r;
+    }
+
+    /** @brief startup：能响应即表示容器构造完成（恒 200） */
+    [[=Get{"/startupz"}]]
+    Response startupz() {
+        Response r;
+        r.body = "{\"status\":\"STARTED\"}";
         return r;
     }
 
@@ -109,6 +157,43 @@ public:
         }
         body += "]";
         Response r;
+        r.body = std::move(body);
+        return r;
+    }
+
+private:
+    Ctx& ctx_;
+};
+
+/**
+ * @brief 内建指标端点 — GET /metrics（Prometheus 文本格式 0.0.4）
+ *
+ * 渲染 metrics::global() 全部系列（web 记录请求指标，ORM 等后续可
+ * 自行注册池指标）+ 应用级 gauge（beans / startup_ms / uptime）。
+ * k8s/Prometheus 抓取即开即用；无敏感数据（路由模板 + 状态大类）。
+ * uptime 锚点是本进程内首次调用，非进程启动精确值（文档已注明）。
+ */
+export template <class Ctx>
+class metrics_endpoint {
+public:
+    explicit metrics_endpoint(Ctx& ctx) : ctx_(ctx) {}
+
+    [[=Get{"/metrics"}]]
+    Response metrics() {
+        std::string body = metrics::global().render_prometheus();
+        // 应用级 gauge：直接拼文本（值随时间/容器状态变化，不入注册表）
+        static const auto started = std::chrono::steady_clock::now();
+        const auto uptime_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started);
+        body += "# TYPE cboot_uptime_ms gauge\n";
+        body += "cboot_uptime_ms " + std::to_string(uptime_ms.count()) + "\n";
+        body += "# TYPE cboot_beans gauge\n";
+        body += "cboot_beans " + std::to_string(ctx_.active_bean_count()) + "\n";
+        body += "# TYPE cboot_startup_ms gauge\n";
+        body += "cboot_startup_ms " + std::to_string(ctx_.startup_ms()) + "\n";
+
+        Response r;
+        r.content_type = "text/plain; version=0.0.4; charset=utf-8";
         r.body = std::move(body);
         return r;
     }
@@ -281,14 +366,27 @@ struct boot_runner<type_list<Ts...>, type_list<Hs...>> {
 
         server s(sc);
         install_stop_handler(s);                  // Ctrl+C / 关闭 → 优雅停机
+        // 访问日志层（最外）：request_id + 单行 JSON access log。
+        // 顺序 -950：ErrorHandler(-900) 外层——错误转换后的最终状态码与
+        // 总耗时都能记录；级别/关闭经 log.logger_levels 前缀控制。
+        web::AccessLog access_log;
+        s.use("", web::access_middleware_order,
+              [&access_log](web::request_context& rc,
+                            const web::next_fn& next) {
+                  return access_log.handle(rc, next);
+              });
         s.use("", web::error_middleware_order,
               [&error_handler](web::request_context& rc,
                                const web::next_fn& next) {
                   return error_handler.handle(rc, next);
               });
         register_middlewares<context<Ts...>, Ts...>(s, ctx);
-        health_endpoint<context<Ts...>> ops(ctx); // 内建 /health /beans
-        s.mount(ops);        // 按清单下标挂载：同基类的多个 bean 用类型 get 会歧义；
+        // 内建运维端点：/health /beans（health）/ /metrics（指标）。
+        // 按清单下标挂载：同基类的多个 bean 用类型 get 会歧义；
+        health_endpoint<context<Ts...>> ops(ctx);
+        metrics_endpoint<context<Ts...>> ops_metrics(ctx);
+        s.mount(ops);
+        s.mount(ops_metrics);
         // 未激活 profile 的 bean 不挂载。
         [&]<std::size_t... Is>(std::index_sequence<Is...>) {
             ([&] {

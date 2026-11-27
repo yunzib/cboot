@@ -36,7 +36,8 @@
   text/JSON、级别覆盖、MDC；默认 console 始终可用。
 - **认证**：`cboot.auth` 登录态（opaque token、login/logout/kickout、
   路由策略、控制器级/方法级 `RequireRole`/`RequireScope`、Memory/PostgreSQL TokenStore、
-  Header/Cookie 传输、滑动续期、认证事件）；`cboot.jwt` 独立提供 HS256/RS256 校验。
+  Header/Cookie 传输、滑动续期、双 token access+refresh（轮换/种类隔离）、认证事件）；
+  `cboot.jwt` 独立提供 HS256/RS256 校验。
 - **AOP**：编译期切面链，零代理、零虚调用。
 - **事件**：`[[=EventListener{}]]` + `ctx.publish` / 注入 `event_publisher`，
   同步派发、顺序稳定、异常隔离，可接 `aspect_chain`。
@@ -45,8 +46,14 @@
 - **定时**：`[[=Scheduled{...}]]` 固定延迟 / 5/6 段 cron，单调度线程、异常隔离、停机取消。
 - **ORM（可选组件）**：通用类型安全 ORM + PostgreSQL / MySQL 驱动，
   实体元数据、CRUD、查询 DSL、事务、原生 SQL 列名映射。
-- **运维**：内建 `GET /health`（200/503 + JSON）、`GET /beans`（仅 dev）。
-- **传输**：threads / IOCP / epoll；万级连接、背压 503、handler 超时 504、优雅停机。
+- **运维**：内建 `GET /health`（200/503 + JSON）、`GET /beans`（仅 dev）、
+  k8s 三探针 `GET /livez` `/readyz` `/startupz`；`GET /metrics`
+  （Prometheus 文本：请求计数/耗时直方图/连接池/应用 gauge）。
+- **可观测性**：内建 `AccessLog` 中间件——request_id（X-Request-Id 回显，
+  写入 MDC 与 `request_context`）+ 单行 JSON 访问日志；限流
+  `web::RateLimiter`（route/ip 维度、429 + Retry-After、超限指标）。
+- **传输**：threads / IOCP / epoll；万级连接、背压 503、handler 超时 504、
+  优雅停机（Windows 控制台事件 / POSIX `SIGTERM`|`SIGINT`）。
 - **协程**：`task<T>` / `sync_wait`；handler 可返回 `task<Response>`。
 - **工程**：C++20 命名模块 + `import std` + CMake 包（`find_package(cboot)`）。
 

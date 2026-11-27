@@ -40,10 +40,61 @@ module cboot.orm.mysql;
 import std;
 import cboot.orm.driver;        // DataSource / statement / db_value
 import cboot.core.context;      // health_registry
+import cboot.core.metrics;      // 池/查询指标（Prometheus）
+import cboot.log;               // 慢 SQL warn 日志
 
 namespace orm {
 
 namespace {
+
+/** @brief 驱动名标签（指标维度；进程内固定 → 系列只建一次） */
+metrics::gauge& pool_gauge(const char* state) {
+    // 函数级静态：首次取用建系列，此后零查表（系列终身有效）
+    static metrics::gauge& idle = metrics::global().get_gauge(
+        "orm_pool_connections",
+        {metrics::label("dialect", "mysql"), metrics::label("state", "idle")});
+    static metrics::gauge& active = metrics::global().get_gauge(
+        "orm_pool_connections",
+        {metrics::label("dialect", "mysql"), metrics::label("state", "active")});
+    return std::string_view(state) == "idle" ? idle : active;
+}
+
+metrics::counter& query_counter() {
+    static metrics::counter& c = metrics::global().get_counter(
+        "orm_queries_total", {metrics::label("dialect", "mysql")});
+    return c;
+}
+
+metrics::histogram& query_histogram() {
+    static metrics::histogram& h = metrics::global().get_histogram(
+        "orm_query_duration_ms", {metrics::label("dialect", "mysql")});
+    return h;
+}
+
+metrics::counter& reconnect_counter() {
+    static metrics::counter& c = metrics::global().get_counter(
+        "orm_pool_reconnects_total", {metrics::label("dialect", "mysql")});
+    return c;
+}
+
+/**
+ * @brief 查询结束后的统一上报：耗时直方图 + 计数 + 慢 SQL 日志
+ *
+ * 慢 SQL 日志截取 SQL 前 256 字符（防御超长语句刷屏）；
+ * 阈值 <= 0 表示关闭日志（指标照记）。
+ */
+void report_query(const MysqlProps* cfg, std::string_view sql,
+                  std::chrono::steady_clock::time_point start) {
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start);
+    query_counter().inc();
+    query_histogram().observe(static_cast<double>(ms.count()));
+    if (cfg && cfg->slow_query_ms > 0
+        && ms.count() >= cfg->slow_query_ms) {
+        auto log = logging::get("cboot.orm.mysql");
+        log.warn("slow query {} ms: {:.256}", ms.count(), sql);
+    }
+}
 
 /** @brief 进程级 libmysql 初始化；线程级初始化在 ensure_thread 中完成 */
 void ensure_library() {
@@ -111,8 +162,8 @@ std::string sql_literal(MYSQL* conn, const db_value& v) {
  */
 class mysql_statement final : public statement {
 public:
-    mysql_statement(MYSQL* conn, std::string sql)
-        : conn_(conn), sql_(std::move(sql)) {}
+    mysql_statement(MysqlProps* cfg, MYSQL* conn, std::string sql)
+        : cfg_(cfg), conn_(conn), sql_(std::move(sql)) {}
 
     ~mysql_statement() override {
         if (result_) mysql_free_result(result_);
@@ -200,13 +251,18 @@ private:
         if (next != params_.size())
             throw error("cboot.orm: extra SQL parameter");
 
+        // 计时覆盖渲染 + 执行 + 结果集全量取回（store_result）
+        const auto start = std::chrono::steady_clock::now();
         if (mysql_real_query(conn_, sql.data(),
-                             static_cast<unsigned long>(sql.size())) != 0)
+                             static_cast<unsigned long>(sql.size())) != 0) {
+            report_query(cfg_, sql_, start);
             throw error("cboot.orm: " + std::string(mysql_error(conn_)));
+        }
 
         result_ = mysql_store_result(conn_);
         const auto affected = mysql_affected_rows(conn_);
         affected_rows_ = affected < 0 ? 0 : static_cast<std::size_t>(affected);
+        report_query(cfg_, sql_, start);
         if (!result_ && mysql_field_count(conn_) != 0)
             throw error("cboot.orm: " + std::string(mysql_error(conn_)));
     }
@@ -216,6 +272,7 @@ private:
             throw error("cboot.orm: no current row");
     }
 
+    MysqlProps* cfg_ = nullptr;
     MYSQL* conn_;
     std::string sql_;
     std::vector<std::optional<db_value>> params_;
@@ -229,23 +286,27 @@ private:
 /** @brief 单个 libmysql 连接；由连接池独占租借 */
 class mysql_connection final : public connection {
 public:
-    explicit mysql_connection(MYSQL* conn) : conn_(conn) {}
+    mysql_connection(MysqlProps* cfg, MYSQL* conn) : cfg_(cfg), conn_(conn) {}
     ~mysql_connection() override {
         if (conn_) mysql_close(conn_);
     }
 
     std::unique_ptr<statement> prepare(std::string_view sql) override {
         ensure_thread();
-        return std::make_unique<mysql_statement>(conn_, std::string(sql));
+        return std::make_unique<mysql_statement>(cfg_, conn_, std::string(sql));
     }
 
     void execute(std::string_view sql) override {
         ensure_thread();
+        const auto start = std::chrono::steady_clock::now();
         if (mysql_real_query(conn_, sql.data(),
-                             static_cast<unsigned long>(sql.size())) != 0)
+                             static_cast<unsigned long>(sql.size())) != 0) {
+            report_query(cfg_, sql, start);
             throw error("cboot.orm: " + std::string(mysql_error(conn_)));
+        }
 
         MYSQL_RES* r = mysql_store_result(conn_);
+        report_query(cfg_, sql, start);
         if (!r && mysql_field_count(conn_) != 0)
             throw error("cboot.orm: " + std::string(mysql_error(conn_)));
         if (r) mysql_free_result(r);
@@ -256,8 +317,33 @@ public:
         return static_cast<std::int64_t>(mysql_insert_id(conn_));
     }
 
+    /**
+     * @brief 真实探测（一次往返）：mysql_ping 校验链路是否存活
+     *
+     * libmysqlclient ≥5.7 默认关闭自动重连，ping 失败即链路已死；
+     * 死连接交还给池方重建。
+     */
+    bool probe() {
+        ensure_thread();
+        return mysql_ping(conn_) == 0;
+    }
+
+    /** @brief 是否需要借出前探测：空闲超过 idle_probe_s 且开关打开 */
+    bool probe_due() const {
+        if (!cfg_ || cfg_->idle_probe_s <= 0) return false;
+        const auto idle = std::chrono::steady_clock::now() - last_used_;
+        return idle > std::chrono::seconds(cfg_->idle_probe_s);
+    }
+
+    /** @brief 记录最近使用时间（借出/归还时调用） */
+    void touch() { last_used_ = std::chrono::steady_clock::now(); }
+
+    MysqlProps* cfg_ = nullptr;
+
 private:
     MYSQL* conn_;
+    std::chrono::steady_clock::time_point last_used_{
+        std::chrono::steady_clock::now()};
 };
 
 } // namespace
@@ -322,7 +408,7 @@ struct MysqlDataSource::impl {
         }
 
         if (health) health->set_healthy();
-        return std::make_unique<mysql_connection>(conn);
+        return std::make_unique<mysql_connection>(cfg, conn);
     }
 
     /** @brief 打开连接池；失败时已建立连接全部销毁 */
@@ -338,10 +424,13 @@ struct MysqlDataSource::impl {
                 idle.push_back(std::move(c));
                 ++total;
             }
+            pool_gauge("idle").set(static_cast<double>(idle.size()));
+            pool_gauge("active").set(0);
         } catch (...) {
             std::lock_guard guard(mu);
             idle.clear();
             total = 0;
+            pool_gauge("idle").set(0);
             throw;
         }
     }
@@ -352,6 +441,7 @@ struct MysqlDataSource::impl {
         closed = true;
         idle.clear();
         total = 0;
+        pool_gauge("idle").set(0);
         cv.notify_all();
     }
 
@@ -359,12 +449,31 @@ struct MysqlDataSource::impl {
     void release(mysql_connection* c) {
         std::unique_ptr<mysql_connection> p(c);
         std::lock_guard guard(mu);
+        pool_gauge("active").set(active_ > 0 ? static_cast<double>(active_ - 1)
+                                             : 0.0);
+        --active_;
         if (closed) return;
+        p->touch();                        // 空闲计时的锚点 = 归还时刻
         idle.push_back(std::move(p));
+        pool_gauge("idle").set(static_cast<double>(idle.size()));
         cv.notify_one();
     }
 
-    /** @brief 租借连接；池满时等待 acquire_timeout_ms */
+    /**
+     * @brief 借出前校验：空闲过久时一次 mysql_ping 探测
+     *
+     * 校验失败 → 销毁死连接并重建（保持池容量不变，业务无感知）；
+     * 重建计入 orm_pool_reconnects_total。重建失败按连接失败处理。
+     */
+    std::unique_ptr<mysql_connection> validate_or_reconnect(
+        std::unique_ptr<mysql_connection> c) {
+        if (!c->probe_due() || c->probe()) return c;
+        // 死连接：销毁重建（total 计数不变，容量语义保持）
+        reconnect_counter().inc();
+        return connect_one();
+    }
+
+    /** @brief 租借连接；池满时等待 acquire_timeout_ms；借出前做活性校验 */
     connection_lease acquire() {
         std::unique_lock lock(mu);
         const auto timeout = std::chrono::milliseconds(
@@ -377,8 +486,24 @@ struct MysqlDataSource::impl {
             if (!idle.empty()) {
                 auto c = std::move(idle.back());
                 idle.pop_back();
+                pool_gauge("idle").set(static_cast<double>(idle.size()));
                 lock.unlock();
+                try {
+                    c = validate_or_reconnect(std::move(c));
+                } catch (...) {
+                    // 校验后重建失败：归还容量计数，异常上抛
+                    std::lock_guard guard(mu);
+                    --total;
+                    pool_gauge("active").set(static_cast<double>(active_));
+                    throw;
+                }
+                c->touch();
                 auto* raw = c.release();
+                {
+                    std::lock_guard guard(mu);
+                    ++active_;
+                    pool_gauge("active").set(static_cast<double>(active_));
+                }
                 return connection_lease(raw, [this](connection* p) {
                     release(static_cast<mysql_connection*>(p));
                 });
@@ -390,6 +515,11 @@ struct MysqlDataSource::impl {
                 try {
                     auto c = connect_one();
                     auto* raw = c.release();
+                    {
+                        std::lock_guard guard(mu);
+                        ++active_;
+                        pool_gauge("active").set(static_cast<double>(active_));
+                    }
                     return connection_lease(raw, [this](connection* p) {
                         release(static_cast<mysql_connection*>(p));
                     });
@@ -403,6 +533,8 @@ struct MysqlDataSource::impl {
                 throw error("cboot.orm: acquire connection timeout");
         }
     }
+
+    std::size_t active_ = 0;    // 已借出未归还的连接数（gauge 用）
 };
 
 // ==================== MysqlDataSource ====================

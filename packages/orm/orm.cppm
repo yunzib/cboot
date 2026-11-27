@@ -21,12 +21,14 @@ import cboot.orm.annotations;
 import cboot.orm.driver;
 import cboot.orm.meta;
 import cboot.orm.dsl;
+import cboot.orm.migration;
 
 // 单一入口：import cboot.orm 即获得全部通用 ORM 词汇。
 export import cboot.orm.annotations;
 export import cboot.orm.driver;
 export import cboot.orm.meta;
 export import cboot.orm.dsl;
+export import cboot.orm.migration;
 
 export namespace orm {
 
@@ -414,10 +416,11 @@ private:
 /**
  * @brief ORM 通用契约组件描述符
  *
- * 只贡献 EntityManager；具体 DataSource 必须由驱动组件提供。
+ * 贡献 EntityManager 与 MigrationRunner（注入 DataSource 后可用）；
+ * 具体 DataSource 必须由驱动组件提供。
  */
 export struct orm_component {
     static constexpr bean_name name{"orm"};
-    using beans = type_list<orm::EntityManager>;
+    using beans = type_list<orm::EntityManager, orm::MigrationRunner>;
     using dependencies = type_list<>;
 };

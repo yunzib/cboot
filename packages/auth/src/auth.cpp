@@ -223,7 +223,64 @@ std::string AuthService::login(session s) {
         const int timeout = props_.timeout_s > 0 ? props_.timeout_s : 7200;
         s.expires_at = s.issued_at + timeout;
     }
+    s.kind = std::string(access_token_kind);   // 请求凭证，refresh 不可冒充
     return store_.create(std::move(s));
+}
+
+token_pair AuthService::login_pair(session s) {
+    const std::int64_t now = now_seconds();
+    token_pair out;
+
+    session access = s;
+    access.issued_at = now;
+    access.expires_at =
+        now + (props_.timeout_s > 0 ? props_.timeout_s : 7200);
+    access.kind = std::string(access_token_kind);
+    out.access_token = store_.create(access);
+    out.access_expires_at = access.expires_at;
+
+    if (props_.refresh_timeout_s > 0) {
+        session refresh = access;              // 继承 subject/roles/scopes/device
+        refresh.kind = std::string(refresh_token_kind);
+        refresh.issued_at = now;
+        refresh.expires_at = now + props_.refresh_timeout_s;
+        out.refresh_token = store_.create(refresh);
+        out.refresh_expires_at = refresh.expires_at;
+    }
+    return out;
+}
+
+std::optional<token_pair> AuthService::refresh(std::string_view refresh_token) {
+    if (props_.refresh_timeout_s <= 0 || refresh_token.empty())
+        return std::nullopt;
+
+    auto stored = store_.get(refresh_token);
+    // 只接受 refresh 种类；access token 不能当 refresh 用
+    if (!stored || stored->kind != refresh_token_kind) return std::nullopt;
+
+    const std::int64_t now = now_seconds();
+    token_pair out;
+
+    session access = *stored;
+    access.issued_at = now;                    // 新登录时间：滑动续期上限重置
+    access.expires_at =
+        now + (props_.timeout_s > 0 ? props_.timeout_s : 7200);
+    access.kind = std::string(access_token_kind);
+    out.access_token = store_.create(access);
+    out.access_expires_at = access.expires_at;
+
+    if (props_.rotate_refresh) {
+        session next = *stored;
+        next.issued_at = now;
+        next.expires_at = now + props_.refresh_timeout_s;
+        out.refresh_token = store_.create(next);
+        out.refresh_expires_at = next.expires_at;
+        store_.revoke(refresh_token);          // 旧 refresh 立即失效
+    } else {
+        out.refresh_token = std::string(refresh_token);
+        out.refresh_expires_at = stored->expires_at;
+    }
+    return out;
 }
 
 std::optional<std::string_view> AuthService::token(
@@ -252,7 +309,10 @@ std::optional<std::string_view> AuthService::token(
 
 std::optional<session> AuthService::find(std::string_view token) const {
     if (token.empty()) return std::nullopt;
-    return store_.get(token);
+    auto s = store_.get(token);
+    // refresh token 不是请求凭证：出现在 Authorization 里一律视为无效
+    if (s && s->kind == refresh_token_kind) return std::nullopt;
+    return s;
 }
 
 std::optional<session> AuthService::current(
@@ -281,6 +341,12 @@ void AuthService::logout(const web::request_context& ctx) {
 
 void AuthService::logout(std::string_view token) {
     if (!token.empty()) store_.revoke(token);
+}
+
+void AuthService::logout_pair(std::string_view access_token,
+                              std::string_view refresh_token) {
+    if (!access_token.empty()) store_.revoke(access_token);
+    if (!refresh_token.empty()) store_.revoke(refresh_token);
 }
 
 void AuthService::kickout(std::string_view subject) {

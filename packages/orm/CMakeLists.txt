@@ -14,8 +14,10 @@ cboot_component(orm
         orm.driver.cppm
         orm.meta.cppm
         orm.dsl.cppm
+        orm.migration.cppm
         orm.cppm
-    DEPENDS meta core config
+    # log：迁移执行日志（cboot.orm.migration logger）
+    DEPENDS meta core config log
     TEST_SOURCES test/orm_smoke.cpp
 )
 
