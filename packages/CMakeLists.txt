@@ -11,9 +11,9 @@
 add_subdirectory(meta)
 add_subdirectory(json)
 add_subdirectory(config)
+add_subdirectory(aop)       # 叶子包；core.context 的生命周期切面依赖它
 add_subdirectory(core)
 add_subdirectory(log)
-add_subdirectory(aop)
 add_subdirectory(async)
 add_subdirectory(validation)
 add_subdirectory(web)

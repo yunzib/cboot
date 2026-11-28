@@ -1,6 +1,7 @@
 export module cboot.core.context;
 
 import std;
+import cboot.aop;              // call_info / aspect_chain（生命周期切面）
 import cboot.meta.reflect;      // find_annotation / annotation_of（全局作用域工具）
 import cboot.config;            // config::properties（内建注入源）
 import cboot.core.annotations;  // cboot::Inject / PostConstruct / PreDestroy ...
@@ -20,10 +21,26 @@ import cboot.core.annotations;  // cboot::Inject / PostConstruct / PreDestroy ..
  *     - 每 bean 构造后立即 PostConstruct（Spring 语义：初始化完成先于依赖者）
  *     - 析构：逆拓扑序 PreDestroy，随后内存自动释放
  *
+ * 生命周期切面（可选）：context(with_lifecycle_aspects, cfg, 切面...) 把
+ * 每个 bean 的 PostConstruct / PreDestroy 包进 aspect_chain。切面是容器
+ * 构造前就存在的值对象——此时容器尚未建好，不能是 bean，也不能取依赖。
+ *
  * GCC16.2 纪律继承：vector<info> 不外逃 / splice 操作数取常量表达式形态
  * （constexpr 局部或 consteval 调用）/ 构造调用走重载决议（传精确参数类型
  * → 自动选中被反射选定的构造器，无需 splice 构造器本体）。
  */
+
+/** @brief 生命周期包装器：around(ci, core)；core() 调生命周期方法本体 */
+export using lifecycle_wrap = std::function<void(
+    const call_info&, const std::function<void()>&)>;
+
+/** @brief 选择"带生命周期切面"的构造函数（标签类型，同 std::in_place_t） */
+export struct with_lifecycle_aspects_t {
+    explicit with_lifecycle_aspects_t() = default;
+};
+
+/** @brief 标签实例：context<A, B> ctx(with_lifecycle_aspects, cfg, Trace{}); */
+export inline constexpr with_lifecycle_aspects_t with_lifecycle_aspects{};
 
 /** @brief 事件发布结果（同步派发：成功/失败监听者计数） */
 export struct event_result {
@@ -696,27 +713,32 @@ struct cycle_finder {
     std::string msg;
 
     consteval bool dfs(std::size_t u) {
-        state[u] = 1;                 // 栈中
-        stack[depth++] = u;
-        for (std::size_t v = 0; v < N; ++v) {
-            if (!deps[u * N + v]) continue;
-            if (state[v] == 0) {
-                if (dfs(v)) return true;
-            } else if (state[v] == 1) {    // 回边 → 环
-                std::size_t start = 0;
-                while (start < depth && stack[start] != v) ++start;
-                msg = "cboot: circular dependency: ";
-                for (std::size_t i = start; i < depth; ++i) {
-                    msg += std::meta::identifier_of(types[stack[i]]);
-                    msg += " -> ";
+        // 空清单守卫：零长度 std::array 的 operator[] 非法，函数体不能实例化。
+        if constexpr (N == 0) {
+            return false;
+        } else {
+            state[u] = 1;             // 栈中
+            stack[depth++] = u;
+            for (std::size_t v = 0; v < N; ++v) {
+                if (!deps[u * N + v]) continue;
+                if (state[v] == 0) {
+                    if (dfs(v)) return true;
+                } else if (state[v] == 1) {    // 回边 → 环
+                    std::size_t start = 0;
+                    while (start < depth && stack[start] != v) ++start;
+                    msg = "cboot: circular dependency: ";
+                    for (std::size_t i = start; i < depth; ++i) {
+                        msg += std::meta::identifier_of(types[stack[i]]);
+                        msg += " -> ";
+                    }
+                    msg += std::meta::identifier_of(types[v]);
+                    return true;
                 }
-                msg += std::meta::identifier_of(types[v]);
-                return true;
             }
+            --depth;
+            state[u] = 2;             // 完成
+            return false;
         }
-        --depth;
-        state[u] = 2;                 // 完成
-        return false;
     }
 };
 
@@ -813,17 +835,36 @@ class context {
 public:
     /** @brief cfg：应用配置（nullptr = 无；bean 构造器注入 const config::properties&） */
     explicit context(const config::properties* cfg = nullptr) : cfg_(cfg) {
-        const auto t0 = std::chrono::steady_clock::now();
-        constexpr bool listeners_ok =
-            (detail::validate_listeners<Beans...>(), true);
-        (void)listeners_ok;
-        register_events();
-        publisher_.bind(this, &event_map_);
-        init_profiles();
-        build_all();
-        startup_ms_ = static_cast<std::size_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - t0).count());
+        initialize();
+    }
+
+    /**
+     * @brief 带生命周期切面的容器：切面包住每个 bean 的 PostConstruct / PreDestroy
+     *
+     * 切面契约：void around(const call_info&, Next&& next)；靠
+     * call_info.point 区分 post_construct / pre_destroy。
+     *   - PostConstruct 阶段抛异常 → 容器构造失败（启动失败，fail-loud）
+     *   - PreDestroy 阶段的异常被隔离并记录，其余 bean 照常销毁
+     *   - 切面不调 next() = 跳过该 bean 的生命周期方法（由切面负责后果）
+     */
+    template <class... As>
+    context(with_lifecycle_aspects_t, const config::properties* cfg,
+            As... aspects)
+        : cfg_(cfg) {
+        static_assert(
+            (AspectFor<As, void, std::function<void()>&&> && ...),
+            "cboot: lifecycle aspect must provide "
+            "'void around(const call_info&, Next&&)'");
+        if constexpr (sizeof...(As) > 0) {
+            auto chain = std::make_shared<aspect_chain<As...>>(
+                std::move(aspects)...);
+            lifecycle_ = [chain = std::move(chain)](
+                             const call_info& ci,
+                             const std::function<void()>& core) {
+                chain->run(ci, [&] { core(); });
+            };
+        }
+        initialize();
     }
     ~context() {
         pre_destroy_all();
@@ -1061,6 +1102,7 @@ private:
     event_publisher::dispatch_map event_map_;
     event_publisher publisher_;
     health_registry health_;
+    lifecycle_wrap lifecycle_;       // 空 = 生命周期方法直接调用（默认）
     std::size_t startup_ms_ = 0;
 
     // ── profile 过滤（配置 cboot.profiles.active，逗号分隔）────────────────
@@ -1129,6 +1171,41 @@ private:
     }
 
     // ── 构造 + PostConstruct（拓扑序逐 bean）────────────────────────────
+
+    /** @brief 两个构造函数共用：监听注册 → profile → 构造 + PostConstruct */
+    void initialize() {
+        const auto t0 = std::chrono::steady_clock::now();
+        constexpr bool listeners_ok =
+            (detail::validate_listeners<Beans...>(), true);
+        (void)listeners_ok;
+        register_events();
+        publisher_.bind(this, &event_map_);
+        init_profiles();
+        build_all();
+        startup_ms_ = static_cast<std::size_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count());
+    }
+
+    /** @brief 生命周期调用的 call_info（bean 类型名 + 方法名，均指向静态存储） */
+    template <class T, std::meta::info Fn>
+    static consteval call_info lifecycle_info(join_point point) {
+        return call_info{
+            .bean = detail::type_name_of<T>(),
+            .method = std::meta::has_identifier(Fn)
+                ? std::meta::identifier_of(Fn) : std::string_view{},
+            .point = point,
+        };
+    }
+
+    /** @brief 调生命周期方法：有切面则经 aspect_chain，否则直接调用 */
+    template <class Core>
+    void invoke_lifecycle(const call_info& ci, Core&& core) {
+        if (lifecycle_)
+            lifecycle_(ci, std::function<void()>(std::forward<Core>(core)));
+        else
+            core();
+    }
 
     void build_all() {
         constexpr auto order = detail::topo_order<Beans...>();
@@ -1239,7 +1316,9 @@ private:
         using T = bean_t<I>;
         constexpr std::meta::info fn = detail::lifecycle_fn<T>(^^PostConstruct);
         if constexpr (fn != std::meta::info{}) {
-            (*std::get<I>(beans_)).[:fn:]();
+            invoke_lifecycle(
+                lifecycle_info<T, fn>(join_point::post_construct),
+                [&] { (*std::get<I>(beans_)).[:fn:](); });
         }
     }
 
@@ -1259,12 +1338,30 @@ private:
         }
     }
 
+    /**
+     * @brief 单个 bean 的 PreDestroy；异常隔离
+     *
+     * 析构路径不能抛（~context 隐式 noexcept，抛出即 terminate，且会
+     * 跳过其余 bean 的销毁）。方法本体或切面抛出的异常在这里记录后继续。
+     */
     template <std::size_t I>
     void pre_destroy_one() {
         using T = bean_t<I>;
         constexpr std::meta::info fn = detail::lifecycle_fn<T>(^^PreDestroy);
         if constexpr (fn != std::meta::info{}) {
-            if (auto& p = std::get<I>(beans_)) ( *p ).[:fn:]();
+            if (auto& p = std::get<I>(beans_)) {
+                const call_info info =
+                    lifecycle_info<T, fn>(join_point::pre_destroy);
+                try {
+                    invoke_lifecycle(info, [&] { (*p).[:fn:](); });
+                } catch (const std::exception& e) {
+                    std::cerr << "[cboot] PreDestroy " << info.bean << '.'
+                              << info.method << " failed: " << e.what() << '\n';
+                } catch (...) {
+                    std::cerr << "[cboot] PreDestroy " << info.bean << '.'
+                              << info.method << " failed: unknown exception\n";
+                }
+            }
         }
     }
 };

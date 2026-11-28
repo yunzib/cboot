@@ -283,17 +283,34 @@ Response resp = r.dispatch("GET", "/users/42", "");
 
 ## 切面（AOP）
 
-- 切面类型提供 `around(const call_info&, Next&&)`；`call_info` 含 `bean`、`method`。
-- `r.mount(obj, As...)` 或 `App::aspects = std::tuple<As...>{}` 编译期织入，
-  无运行时代理：
+- 切面类型提供 `around(const call_info&, Next&&)`；`call_info` 含 `bean`、
+  `method`、`point`（`join_point::method` / `post_construct` / `pre_destroy`）。
+- 三类切入点：
+
+| 切入点 | 写法 | 切面形态 |
+|---|---|---|
+| 路由 handler（全局） | `r.mount(obj, As...)` / `App::aspects` | `Response around(...)`，值对象 |
+| 路由 handler（按方法） | `[[=web::UseAspect{"name"}]]` | Bean + `[[=web::Aspect{"name"}]]` |
+| 生命周期方法 | `App::lifecycle_aspects` / `context(with_lifecycle_aspects, cfg, As...)` | `void around(...)`，值对象 |
 
 ```cpp
 struct App : application<App> {
     static constexpr auto aspects = std::tuple<RequestLog>{};
+    static constexpr auto lifecycle_aspects = std::tuple<LifecycleTrace>{};
 };
 ```
-- 每次 mount 复制一份链实例；切面里的计数器/窗口是跨请求共享的，需要同步时
-  自己加锁。
+
+- 方法级选择：切面写成 `[[=Bean{}]] [[=web::Aspect{"tag"}]]`（可注入依赖），
+  在 handler 或控制器上 `[[=web::UseAspect{"tag"}]]`。类级对全部路由生效、
+  方法级追加、重名只生效一次；层次为全局 → 类级 → 方法级。
+- 手工挂载用 `mount_routes(r, ctx, obj, aspects...)`（带注册表）；
+  `r.mount(obj)` / `r.mount(obj, As...)` 遇到 `UseAspect` 会编译错。
+- 未注册的切面名 → 编译错；切面 Bean 的 profile 未激活 → 挂载期报错。
+- 每次 mount 复制一份链实例（全局切面每 bean 一份共享链）；切面里的
+  计数器/窗口是跨请求共享的，需要同步时自己加锁。切面 Bean 的实例属于容器，
+  天然跨路由共享。
+- 生命周期切面是容器构造前的值对象：不能是 Bean、不能注入依赖；
+  `PostConstruct` 异常 → 启动失败，`PreDestroy` 异常被隔离并记录。
 
 ## 事件总线
 
@@ -372,7 +389,8 @@ struct App : application<App> {
 
 ## 中间件与认证（web middleware / cboot.jwt / cboot.auth）
 
-- 扩展点固定四类：`beans`、`hooks`、`middleware`、`aspects`。
+- 扩展点固定四类：`beans`、`hooks`、`middleware`、`aspects`
+  （路由 `aspects` + 生命周期 `lifecycle_aspects` 两份清单）。
   middleware 是 Bean 角色，不新增组件描述符字段。
 - 中间件 Bean：`[[=web::Middleware{.name, .order}]]` + `handle(request_context&, next_fn)`。
   `name` 为空 = 全局；非空 = 仅路由带 `[[=web::UseMiddleware{"name"}]]` 时执行。
@@ -460,7 +478,7 @@ struct App : application<App> {
   `cboot_package(... TEST_SOURCES test/<pkg>_smoke.cpp)`，测试目标会自动
   直接链接本包 `DEPENDS` 的 provider target。
 - 改公开 API 后同时更新 `README.md`、`docs/使用手册.md`、
-  `docs/契约组件.md`、`docs/定时任务.md`、`docs/ORM.md`、
+  `docs/契约组件.md`、`docs/定时任务.md`、`docs/ORM.md`、`docs/AOP.md`、
   `docs/认证.md`、`docs/CORS.md`、`docs/错误处理.md` 与 `docs/日志.md`；
   `docs/任务清单.md` 是本地忽略文件，按需更新。
 
@@ -482,6 +500,13 @@ struct App : application<App> {
   `cxx_std_26` 要显式声明。
 - 包内测试直接 import 依赖模块时，测试目标也要直接链接对应 provider；
   `cboot_package_target()` 已把 `DEPENDS` 一并挂到测试目标上。
+- 模板实参里不能嵌 consteval 调用（`f<T, I>(k)` 的 `>` 提前闭合，GCC16 报
+  "parse error in template argument list" / "cannot resolve overloaded function"）：
+  下标改成模板参数，或把反射存进类里的 `static constexpr` 再取。
+- 按 N 递归的 consteval 取下标器要 `if constexpr (N == 0)` 守卫：零长度
+  `std::array` 的 `operator[]` 非法（空 bean 清单即触发）。
+- 持引用元素的 `std::tuple` 构造用 `std::forward<As>(as)...`；`std::move`
+  会把左值引用变成亡值，无法绑定到 `T&` 元素（`aspect_chain<Tag&>` 踩过）。
 
 ## 代码注释（必须遵守）
 

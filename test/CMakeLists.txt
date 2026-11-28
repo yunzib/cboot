@@ -62,6 +62,16 @@ add_executable(cboot_aop_smoke aop/aop_smoke.cpp)
 target_link_libraries(cboot_aop_smoke PRIVATE cboot_web)
 add_test(NAME aop_smoke COMMAND cboot_aop_smoke)
 
+# 生命周期切面（P2-4）：PostConstruct / PreDestroy 前后拦截
+add_executable(cboot_lifecycle_aspect_smoke aop/lifecycle_aspect_smoke.cpp)
+target_link_libraries(cboot_lifecycle_aspect_smoke PRIVATE cboot_app)
+add_test(NAME lifecycle_aspect_smoke COMMAND cboot_lifecycle_aspect_smoke)
+
+# 方法级切面选择（P2-5）：[[=web::UseAspect]] → 切面 Bean
+add_executable(cboot_method_aspect_smoke aop/method_aspect_smoke.cpp)
+target_link_libraries(cboot_method_aspect_smoke PRIVATE cboot_app)
+add_test(NAME method_aspect_smoke COMMAND cboot_method_aspect_smoke)
+
 add_executable(cboot_async_smoke async/async_smoke.cpp)
 target_link_libraries(cboot_async_smoke PRIVATE cboot_async)
 add_test(NAME async_smoke COMMAND cboot_async_smoke)
@@ -185,6 +195,13 @@ if(CBOOT_BUILD_NEGATIVE_TESTS)
 
     add_executable(cboot_neg_component_bad_dep negative/negative_component_bad_dep.cpp)
     target_link_libraries(cboot_neg_component_bad_dep PRIVATE cboot_app)
+
+    # 方法级切面选择（P2-5）的两个编译期错误
+    add_executable(cboot_neg_use_aspect_unregistered negative/negative_use_aspect_unregistered.cpp)
+    target_link_libraries(cboot_neg_use_aspect_unregistered PRIVATE cboot_app)
+
+    add_executable(cboot_neg_use_aspect_no_registry negative/negative_use_aspect_no_registry.cpp)
+    target_link_libraries(cboot_neg_use_aspect_no_registry PRIVATE cboot_app)
 endif()
 
 set_tests_properties(web_server_smoke PROPERTIES TIMEOUT 30)
@@ -192,7 +209,8 @@ set_tests_properties(
     context_smoke named_smoke value_smoke profile_smoke event_smoke
     scheduled_smoke schedule_expr_smoke component_smoke health_smoke
     json_smoke config_smoke web_routing_smoke smoke_reflect class_smoke
-    aop_smoke autoscan_smoke async_smoke backend_select_smoke access_smoke
+    aop_smoke lifecycle_aspect_smoke method_aspect_smoke
+    autoscan_smoke async_smoke backend_select_smoke access_smoke
     metrics_smoke ratelimit_smoke
     backpressure_smoke backpressure_iocp_smoke
     handler_timeout_smoke handler_timeout_iocp_smoke

@@ -19,6 +19,8 @@
 `auth.memory`（进程内 TokenStore）、`auth.postgres`（PostgreSQL TokenStore）。
 `auth_memory_component` 与 `auth_postgres_component` 二选一，提供 TokenStore。
 `core` 特殊在职责（注解/DI 容器）和依赖位置，不是其他包的父目录。
+`core` 依赖 `aop`（生命周期切面经 `aspect_chain`），`aop` 是叶子包、不反向
+依赖，故 `packages/CMakeLists.txt` 中 `aop` 注册在 `core` 之前。
 
 middleware 不新增描述符字段：中间件是 `[[=Bean{}]]` +
 `[[=web::Middleware{...}]]` 的角色；应用启动时从 `app_beans_t` 收集。

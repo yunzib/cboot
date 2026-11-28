@@ -44,6 +44,26 @@
   {method,route,status 大类} 与 `http_request_duration_ms`
   {method,route}（404 记 route="-" 防标签爆炸，系列指针按方法+路由
   缓存）+ 应用 gauge（cboot_beans/startup_ms/uptime_ms）。
+- 生命周期切面：`join_point` / `call_info.point`、
+  `context(with_lifecycle_aspects, cfg, 切面...)` 把每个 bean 的
+  `PostConstruct` / `PreDestroy` 包进 `aspect_chain`；
+  `App::lifecycle_aspects` / `app_lifecycle_t` 接入应用引导。
+- 方法级切面选择：切面 Bean `[[=web::Aspect{"name"}]]`、路由/控制器级
+  `[[=web::UseAspect{"name"}]]`、注册表协议 `web::AspectRegistry`、
+  `mount_routes()`；类级对全部路由生效、方法级追加、重名去重，
+  层次为全局 → 类级 → 方法级；未注册名 / 无注册表 mount 均编译错。
+
+### 变更
+- `PreDestroy` 抛异常改为隔离并记录（原先析构路径抛出即 terminate）。
+- `cboot.core` 依赖 `cboot.aop`（`packages/CMakeLists.txt` 中 aop 先于 core）。
+
+### 修复
+- 空 bean 清单 `context<>` 无法编译（零长度数组取下标）。
+- `aspect_chain` 持引用元素时构造失败（`std::move` → `std::forward`）。
+
+### 测试
+- 40 项 ctest，Debug/Release 全绿；新增 `lifecycle_aspect_smoke` /
+  `method_aspect_smoke`，负面用例增至 16 个。
 
 # 0.1.0 — 2026-11-23
 

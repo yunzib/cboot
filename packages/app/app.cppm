@@ -276,8 +276,13 @@ consteval auto scan_visible_beans() {
     return std::pair{out, n};
 }
 
-/** @brief 清单执行器：容器构造 → 组件 hooks → 挂载路由（可带切面）→ 服务 */
-template <class Beans, class Hooks = type_list<>>
+/**
+ * @brief 清单执行器：容器构造 → 组件 hooks → 挂载路由（可带切面）→ 服务
+ *
+ * Beans：bean 清单；Hooks：组件 hooks；Lifecycle：生命周期切面类型清单，
+ * 包住每个 bean 的 PostConstruct / PreDestroy（默认为空 = 直接调用）。
+ */
+template <class Beans, class Hooks = type_list<>, class Lifecycle = type_list<>>
 struct boot_runner;
 
 /** @brief 注册带 [[=web::Middleware]] 的 bean（支持全局 / 路由级） */
@@ -333,13 +338,100 @@ void register_error_mappers(web::error_registry& errors, Ctx& ctx) {
     }(std::make_index_sequence<sizeof...(Bs)>{});
 }
 
-template <class... Ts, class... Hs>
-struct boot_runner<type_list<Ts...>, type_list<Hs...>> {
+// ── 切面注册表：[[=web::UseAspect{"name"}]] → 带 [[=web::Aspect{"name"}]] 的 Bean ──
+
+/** @brief Bean 类型 B 的切面名；未标注 [[=web::Aspect]] → 空名（不可被选择） */
+template <class B>
+consteval bean_name aspect_name_of() {
+    if (std::meta::annotations_of_with_type(^^B, ^^web::Aspect).size() > 1)
+        throw "cboot: aspect bean must have at most one [[=web::Aspect{...}]]";
+    for (auto a : std::meta::annotations_of_with_type(^^B, ^^web::Aspect))
+        return std::meta::extract<web::Aspect>(a).name;
+    return {};
+}
+
+/** @brief 单值 consteval 访问器：取 Bean 类型的反射（GCC16 纪律） */
+template <class B>
+consteval std::meta::info bean_reflect() { return ^^B; }
+
+template <class Ctx, std::size_t I>
+consteval bool is_aspect_named(bean_name name) {
+    return aspect_name_of<typename Ctx::template bean_type<I>>() == name;
+}
+
+template <class Ctx, std::size_t I = 0>
+consteval void find_aspect_at(bean_name name, std::size_t& hits,
+                              std::meta::info& found) {
+    if constexpr (I < Ctx::bean_count) {
+        if (is_aspect_named<Ctx, I>(name)) {
+            ++hits;
+            found = bean_reflect<typename Ctx::template bean_type<I>>();
+        }
+        find_aspect_at<Ctx, I + 1>(name, hits, found);
+    }
+}
+
+/**
+ * @brief 名称 → 切面 Bean 的类型反射
+ *
+ * 未注册 / 重名 → 编译错（fail-loud）：UseAspect 写错名字不会静默失效。
+ */
+template <class Ctx>
+consteval std::meta::info find_aspect_bean(bean_name name) {
+    if (name.empty())
+        throw std::define_static_string(
+            "cboot: [[=web::UseAspect{}]] requires a name");
+
+    std::size_t hits = 0;
+    std::meta::info found{};
+    find_aspect_at<Ctx>(name, hits, found);
+
+    if (hits == 0)
+        throw std::define_static_string(
+            "cboot: [[=web::UseAspect{\"" + std::string(name.view())
+            + "\"}]] matches no bean with [[=web::Aspect{...}]]");
+    if (hits > 1)
+        throw std::define_static_string(
+            "cboot: [[=web::UseAspect{\"" + std::string(name.view())
+            + "\"}]] matches " + std::to_string(hits) + " aspect beans");
+    return found;
+}
+
+/**
+ * @brief 切面注册表 — router::mount 的 AspectRegistry 协议实现
+ *
+ * 实例直接引用容器里的切面 Bean：切面可以注入依赖，状态在全部路由间共享。
+ */
+template <class Ctx>
+struct aspect_registry {
+    using is_aspect_registry = void;
+
+    template <bean_name N>
+    using aspect_type = type_of_t<find_aspect_bean<Ctx>(N)>;
+
+    /** @brief 取容器中的切面 Bean；profile 未激活时给出带上下文的报错 */
+    template <class A>
+    A& instance() {
+        try {
+            return ctx.template get<A>();
+        } catch (const std::exception& e) {
+            throw std::runtime_error(
+                "cboot: aspect selected by [[=web::UseAspect]] is unavailable: "
+                + std::string(e.what()));
+        }
+    }
+
+    Ctx& ctx;
+};
+
+template <class... Ts, class... Hs, class... Ls>
+struct boot_runner<type_list<Ts...>, type_list<Hs...>, type_list<Ls...>> {
     template <class... As>
     static int boot(unsigned short port, std::size_t workers, server_io io,
                     std::size_t max_conns, const config::properties* cfg,
                     As... aspects) {
-        context<Ts...> ctx(cfg);                  // 先构造：先于 server 启动
+        // 生命周期切面是值对象（Ls{}）：此时容器尚未建好，不能是 bean。
+        context<Ts...> ctx(with_lifecycle_aspects, cfg, Ls{}...);  // 先于 server 启动
         // 组件 hooks 在全部 bean 构造完后安装；先于 ctx 析构停止。
         hook_scope<context<Ts...>, Hs...> hooks(ctx);
 
@@ -387,11 +479,14 @@ struct boot_runner<type_list<Ts...>, type_list<Hs...>> {
         metrics_endpoint<context<Ts...>> ops_metrics(ctx);
         s.mount(ops);
         s.mount(ops_metrics);
-        // 未激活 profile 的 bean 不挂载。
+        // 未激活 profile 的 bean 不挂载。切面从容器取：handler / 控制器上的
+        // [[=web::UseAspect{"name"}]] 按名选择带 [[=web::Aspect{"name"}]] 的
+        // Bean；aspects（App::aspects）是全局切面，位于最外层。
+        aspect_registry<context<Ts...>> registry{ctx};
         [&]<std::size_t... Is>(std::index_sequence<Is...>) {
             ([&] {
                 if (ctx.template is_active<Is>())
-                    s.mount(ctx.template get_at<Is>(), aspects...);
+                    s.mount(ctx.template get_at<Is>(), registry, aspects...);
             }(), ...);
         }(std::make_index_sequence<sizeof...(Ts)>{});
         int rc = s.run();
@@ -761,6 +856,35 @@ consteval std::meta::info app_beans_info() {
     return list_info<merged>::make();
 }
 
+/** @brief App::lifecycle_aspects 的元组类型；未声明 → std::tuple<> */
+template <class App, class = void>
+struct app_lifecycle_tuple {
+    using type = std::tuple<>;
+};
+template <class App>
+struct app_lifecycle_tuple<App, std::void_t<decltype(App::lifecycle_aspects)>> {
+    using type = std::remove_cvref_t<decltype(App::lifecycle_aspects)>;
+};
+
+/** @brief std::tuple<Ls...> → type_list<Ls...> */
+template <class T>
+struct tuple_types;
+template <class... Ls>
+struct tuple_types<std::tuple<Ls...>> {
+    using type = type_list<Ls...>;
+};
+
+/** @brief App::lifecycle_aspects → 生命周期切面类型清单（声明形态错误 → 编译错） */
+template <class App>
+struct app_lifecycle_types {
+    using tuple = typename app_lifecycle_tuple<App>::type;
+    static_assert(
+        requires { typename tuple_types<tuple>::type; },
+        "cboot: App::lifecycle_aspects must be a std::tuple of aspect types, "
+        "e.g. std::tuple<LifecycleTrace>{}");
+    using type = typename tuple_types<tuple>::type;
+};
+
 } // namespace detail
 
 /** @brief 应用最终 bean 清单：自动扫描 bean + 组件 bean，按类型去重 */
@@ -772,6 +896,16 @@ export template <class App>
 using app_hooks_t = unique_t<
     component_hooks_t<component_closure_t<App>>>;
 
+/**
+ * @brief 应用的生命周期切面清单（App::lifecycle_aspects 的元素类型）
+ *
+ *   static constexpr auto lifecycle_aspects = std::tuple<LifecycleTrace>{};
+ *
+ * 包住每个 bean 的 PostConstruct / PreDestroy；未声明 → 空清单（直接调用）。
+ */
+export template <class App>
+using app_lifecycle_t = typename detail::app_lifecycle_types<App>::type;
+
 // ==================== 启动器 ====================
 
 template <class App, class... As>
@@ -780,8 +914,21 @@ int boot_via(unsigned short port, std::size_t workers, server_io io,
     static_assert(detail::components_valid<app_components_t<App>>::value,
                   "cboot: App::components must be a type_list of Components");
     // 扫描/闭包标签依赖调用方类型（App）：实例化推迟到调用点（见模块头纪律）
-    return detail::boot_runner<app_beans_t<App>, app_hooks_t<App>>::boot(
+    return detail::boot_runner<app_beans_t<App>, app_hooks_t<App>,
+                               app_lifecycle_t<App>>::boot(
         port, workers, io, max_conns, cfg, std::move(aspects)...);
+}
+
+/**
+ * @brief 用容器中的切面 Bean 挂载 obj 的路由（自建 router 时使用）
+ *
+ * 与 application 引导的挂载路径相同：handler / 控制器上的
+ * [[=web::UseAspect{"name"}]] 按名选择容器里带 [[=web::Aspect{"name"}]] 的
+ * Bean；aspects 为全局切面（最外层）。
+ */
+export template <class Ctx, class T, class... As>
+void mount_routes(router& r, Ctx& ctx, T& obj, As... aspects) {
+    r.mount(obj, detail::aspect_registry<Ctx>{ctx}, std::move(aspects)...);
 }
 
 template <class... As>

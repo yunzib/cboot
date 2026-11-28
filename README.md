@@ -38,7 +38,7 @@
   路由策略、控制器级/方法级 `RequireRole`/`RequireScope`、Memory/PostgreSQL TokenStore、
   Header/Cookie 传输、滑动续期、双 token access+refresh（轮换/种类隔离）、认证事件）；
   `cboot.jwt` 独立提供 HS256/RS256 校验。
-- **AOP**：编译期切面链，零代理、零虚调用。
+- **AOP**：编译期切面链，零代理、零虚调用；路由（全局 / 方法级）、生命周期、事件均可织入。
 - **事件**：`[[=EventListener{}]]` + `ctx.publish` / 注入 `event_publisher`，
   同步派发、顺序稳定、异常隔离，可接 `aspect_chain`。
 - **契约组件**：`components` / `dependencies` 编译期装配，组件可贡献 bean 与 hooks；

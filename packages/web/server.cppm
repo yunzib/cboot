@@ -108,11 +108,26 @@ public:
         router_.mount(obj);
     }
 
-    /** @brief 挂载 bean + 切面链（转 router::mount 切面版） */
+    /**
+     * @brief 挂载 bean + 切面链（转 router::mount 切面版）
+     *
+     * 约束排除 AspectRegistry：mount(obj, registry, aspects...) 走下面的重载。
+     */
     template <class T, class... As>
-        requires (sizeof...(As) > 0)
+        requires (sizeof...(As) > 0 && (!web::AspectRegistry<As> && ...))
     void mount(T& obj, As... aspects) {
         router_.mount(obj, std::move(aspects)...);
+    }
+
+    /**
+     * @brief 挂载 bean + 方法级切面选择（转 router::mount 注册表版）
+     *
+     * [[=web::UseAspect{"name"}]] 按名从 registry 选择切面 Bean；
+     * aspects 为全局切面（最外层，可为空）。
+     */
+    template <class T, web::AspectRegistry Registry, class... As>
+    void mount(T& obj, Registry registry, As... aspects) {
+        router_.mount(obj, std::move(registry), std::move(aspects)...);
     }
 
     /** @brief 注册请求中间件（转 router::use） */
